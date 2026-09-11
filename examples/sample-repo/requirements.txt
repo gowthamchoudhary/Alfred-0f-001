@@ -1,0 +1,10 @@
+# Reference implementation of the Alfred repo contract.
+# Alfred works on ANY repo following this convention — nothing here is
+# hardcoded into Alfred itself. This sample exists so you can validate an
+# install end-to-end quickly.
+#
+# Alfred bumps `openai` in the CANDIDATE copy of this file, then builds both.
+fastapi==0.110.0
+uvicorn==0.29.0
+openai==1.99.0
+httpx==0.27.0
