@@ -1,0 +1,19 @@
+# --- Alfred ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+backend/alfred.db
+backend/alfred.db-*
+.env
+.env.local
+
+# --- frontend ---
+frontend/node_modules/
+frontend/dist/
+
+# --- editor/os ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
