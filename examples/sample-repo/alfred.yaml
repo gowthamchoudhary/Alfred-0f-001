@@ -10,5 +10,5 @@ workload:
     - { "message": "Summarize this refund policy." }
     - { "message": "What are your business hours?" }
 github:
-  owner: your-github-user
-  repo: your-repo
+  owner: gowthamchoudhary
+  repo: Alfred-0f-001

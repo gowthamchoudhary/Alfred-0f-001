@@ -147,6 +147,11 @@ def run_investigation(
 
             db.update_investigation(inv_id, current_step="WORKLOAD")
             workload = run_workload(db, inv_id, f"http://127.0.0.1:{port}", wl, env)
+            # Merge diagnostics: the workload's raw_output must not clobber the
+            # pytest raw_output captured above (same key in both dicts).
+            workload_raw = workload.pop("raw_output", "")
+            if workload_raw:
+                run_data["raw_output"] = ((run_data.get("raw_output") or "") + "\n" + workload_raw).strip()
             run_data.update(workload)
             return run_data
 
