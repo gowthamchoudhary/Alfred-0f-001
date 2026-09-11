@@ -1,0 +1,14 @@
+dependency:
+  name: openai
+  current: "1.99.0"
+workload:
+  endpoint: /chat
+  method: POST
+  concurrency: 5
+  requests: 40
+  payloads:
+    - { "message": "Summarize this refund policy." }
+    - { "message": "What are your business hours?" }
+github:
+  owner: your-github-user
+  repo: your-repo
