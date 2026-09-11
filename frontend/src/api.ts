@@ -1,0 +1,176 @@
+export type Verdict =
+  | "SAFE"
+  | "SAFE_WITH_REVIEW"
+  | "MODERATE_RISK"
+  | "HIGH_RISK"
+  | "INCOMPATIBLE";
+
+export interface Investigation {
+  id: string;
+  dependency_name: string;
+  baseline_version: string;
+  candidate_version: string;
+  repo_source: string;
+  trigger: string;
+  status: string;
+  current_step: string | null;
+  verdict: string | null;
+  confidence: number | null;
+  compatibility_score: number | null;
+  github_issue_url: string | null;
+  error: string | null;
+  created_at: number;
+  completed_at: number | null;
+}
+
+export interface AgentEvent {
+  id: number;
+  investigation_id: string;
+  step: string;
+  message: string;
+  level: string;
+  created_at: number;
+}
+
+export interface TestRun {
+  environment: string;
+  container_name: string | null;
+  build_success: boolean;
+  startup_success: boolean;
+  tests_passed: number | null;
+  tests_failed: number | null;
+  tests_errors: number | null;
+  tests_total: number | null;
+  pytest_summary: string | null;
+  workload_total_requests: number | null;
+  workload_successful_requests: number | null;
+  workload_error_rate: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  latency_p99_ms: number | null;
+  throughput_rps: number | null;
+}
+
+export interface MetricDelta {
+  baseline: number;
+  candidate: number;
+  absolute_delta: number;
+  percentage_delta: number | null;
+}
+
+export interface Comparison {
+  metrics: Record<string, MetricDelta>;
+  environment_health: Record<
+    string,
+    { build_success: boolean; startup_success: boolean }
+  >;
+  scores: {
+    functional_score: number;
+    performance_score: number;
+    overall_score: number;
+  };
+}
+
+export interface Decision {
+  verdict: string;
+  confidence: number;
+  reasons: string[];
+  recommendation: string;
+  decided_by: string;
+}
+
+export interface Action {
+  success: boolean;
+  skipped: boolean;
+  skip_reason: string | null;
+  issue_url: string | null;
+  issue_number: number | null;
+  verified: boolean;
+  error: string | null;
+}
+
+export interface InvestigationDetail {
+  investigation: Investigation;
+  events: AgentEvent[];
+  test_runs: TestRun[];
+  comparison: Comparison | null;
+  decision: Decision | null;
+  action: Action | null;
+}
+
+export interface DetectedChange {
+  id: string;
+  dependency_name: string;
+  source: string;
+  latest_version: string;
+  release_notes: string | null;
+  release_url: string | null;
+  published_at: string | null;
+  detected_at: number;
+  triage_status: "pending" | "accepted" | "skipped";
+  triage_reason: string | null;
+  triage_mode: string | null;
+  investigation_id: string | null;
+}
+
+export interface WatchlistEntry {
+  name: string;
+  source: string;
+  repo: string | null;
+  enabled: boolean;
+  last_checked_at: number | null;
+  last_seen_version: string | null;
+}
+
+async function get<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function post<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export const api = {
+  health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
+  investigations: () => get<Investigation[]>("/api/investigations"),
+  investigationDetail: (id: string) => get<InvestigationDetail>(`/api/investigations/${id}`),
+  trigger: (repoSource: string, targetVersion: string, dependencyName?: string) =>
+    post<{ investigation_id: string }>("/api/investigations", {
+      repo_source: repoSource,
+      target_version: targetVersion,
+      dependency_name: dependencyName || null,
+    }),
+  detectedChanges: () => get<DetectedChange[]>("/api/detected-changes"),
+  watchlist: () => get<WatchlistEntry[]>("/api/watchlist"),
+  addWatch: (name: string, source: string, repo?: string) =>
+    post<{ ok: boolean }>("/api/watchlist", { name, source, repo: repo || null }),
+  removeWatch: (name: string) =>
+    fetch(`/api/watchlist/${name}`, { method: "DELETE" }).then((r) => r.json()),
+  pollDiscovery: () => post<{ new_changes: number }>("/api/discovery/poll", {}),
+};
+
+export const VERDICT_STYLES: Record<string, string> = {
+  SAFE: "bg-signal-green/15 text-signal-green border-signal-green/40",
+  SAFE_WITH_REVIEW: "bg-signal-amber/15 text-signal-amber border-signal-amber/40",
+  MODERATE_RISK: "bg-signal-orange/15 text-signal-orange border-signal-orange/40",
+  HIGH_RISK: "bg-signal-red/15 text-signal-red border-signal-red/40",
+  INCOMPATIBLE: "bg-signal-red/25 text-red-300 border-red-500/50",
+};
+
+export const STATUS_STYLES: Record<string, string> = {
+  running: "bg-signal-blue/15 text-signal-blue border-signal-blue/40 animate-pulse",
+  complete: "bg-signal-green/10 text-signal-green border-signal-green/30",
+  failed: "bg-signal-red/10 text-signal-red border-signal-red/30",
+  pending: "bg-slate-500/10 text-slate-400 border-slate-500/30",
+};
