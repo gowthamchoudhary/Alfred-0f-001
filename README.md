@@ -24,13 +24,14 @@ backend/alfred/
 ├── workload.py        WORKLOAD — real concurrent HTTP (httpx + asyncio), p50/p95/p99
 ├── compare.py         COMPARE  — deterministic deltas + compatibility score (no LLM)
 ├── research.py        RESEARCH — one targeted Exa search (fallback: PyPI/GitHub scrape)
-├── reason.py          REASON   — ONE Groq (llama-3.3-70b-versatile) call, or rule-based fallback
+├── reason.py          REASON   — ONE Groq (openai/gpt-oss-120b) call, or rule-based fallback
 ├── github_action.py   ACTION/VERIFY — REST issue create + GET-back verification
 ├── discovery.py       watchlist polling: PyPI RSS + GitHub releases
 ├── triage.py          deterministic filter (→ LLM only when ambiguous) → auto-invoke
 ├── contract.py        the repo contract validator (no demo app baked in)
-├── db.py              SQLite: investigations, agent_events, test_runs,
-│                      comparisons, decisions, actions, detected_changes, watchlist
+├── db.py              persistence: Supabase (hosted Postgres, SQLAlchemy) with a
+│                      local SQLite fallback for dev/tests
+├── db/schema.sql      the canonical Postgres schema, applied idempotently on startup
 ├── app.py             FastAPI REST API + static dashboard serving
 └── cli.py             manual trigger fallback / debug tool
 frontend/              React + Tailwind dashboard (polling, no websockets)
@@ -78,7 +79,8 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
   `functional = tests_passed_cand / tests_passed_base`,
   `performance = 1 - max(0, (p95_cand - p95_base)/p95_base)`,
   `overall = 0.6*functional + 0.4*performance`
-* **REASON** is ONE Groq call (`llama-3.3-70b-versatile`, via Groq's OpenAI-compatible
+* **REASON** is ONE Groq call (`openai/gpt-oss-120b` — Groq's free-tier JSON-capable
+  model, replacing the retired `llama-3.3-70b-versatile`; via Groq's OpenAI-compatible
   API) fed the real comparison + web evidence; without `GROQ_API_KEY` it degrades to a
   rule-based verdict
   (≥95 SAFE, ≥80 SAFE_WITH_REVIEW, ≥60 MODERATE_RISK, else HIGH_RISK) — the
@@ -103,6 +105,19 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
    hidden, and they never trigger the expensive Docker pipeline.
 4. Accepted changes auto-invoke `run_investigation()` — this replaces manual
    CLI triggering as the primary path.
+
+## Persistence
+
+Alfred stores all pipeline data in **Supabase (hosted Postgres)** so history
+survives sandbox resets. The canonical schema is
+[`backend/db/schema.sql`](backend/db/schema.sql) — applied automatically and
+idempotently at startup. **There is deliberately no column anywhere in the
+schema for credentials**: GitHub tokens are per-request and used in-memory
+only, `GROQ_API_KEY`/`EXA_API_KEY` stay in the environment; only results
+(issue URLs, verified flags, metrics, verdicts) are ever written.
+
+Without `SUPABASE_DB_URL` Alfred falls back to a local SQLite file (same
+schema, warns at startup) so dev and unit tests need no credentials.
 
 ## Running
 
@@ -130,7 +145,8 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 | `GROQ_API_KEY` | enables LLM reasoning + LLM triage checks (Groq free tier, used intentionally for cost) |
 | `EXA_API_KEY` | enables targeted web research (Exa) |
 | (no `GITHUB_TOKEN`) | GitHub credentials are **not** env vars — each caller supplies `github_token`/`github_owner`/`github_repo` with their investigation request (see Credentials above) |
-| `ALFRED_DB_PATH` | SQLite location (default `backend/alfred.db`) |
+| `SUPABASE_DB_URL` | Supabase Postgres connection string (Project Settings → Database → Connection string, URI tab). When set, all investigation history persists to Supabase — outside this sandbox, so it survives workspace resets. Without it, Alfred falls back to a local SQLite file and warns. |
+| `ALFRED_DB_PATH` | SQLite fallback location only (default `backend/alfred.db`); ignored when `SUPABASE_DB_URL` is set |
 | `ALFRED_POLL_INTERVAL` | discovery poll cadence in seconds (default 900) |
 
 ## Credentials

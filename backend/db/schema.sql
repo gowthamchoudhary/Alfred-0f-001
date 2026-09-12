@@ -1,0 +1,123 @@
+-- Alfred schema — Postgres (Supabase).
+-- This exact script is executed on startup by backend/alfred/db.py (idempotent:
+-- IF NOT EXISTS everywhere, safe to re-run). A mirror of this schema for the
+-- local SQLite fallback lives inline in db.py.
+--
+-- Credential safety by construction: there is deliberately NO column anywhere
+-- in this schema for GitHub tokens, GROQ_API_KEY, or EXA_API_KEY. Only results
+-- (issue URLs, verified flags, metrics, verdicts, triage decisions) are stored.
+
+CREATE TABLE IF NOT EXISTS investigations (
+    id TEXT PRIMARY KEY,
+    dependency_name TEXT NOT NULL,
+    baseline_version TEXT NOT NULL,
+    candidate_version TEXT NOT NULL,
+    repo_source TEXT NOT NULL,
+    trigger TEXT NOT NULL DEFAULT 'manual',       -- discovery | manual
+    status TEXT NOT NULL DEFAULT 'pending',       -- pending|running|complete|failed
+    current_step TEXT,
+    verdict TEXT,
+    confidence DOUBLE PRECISION,
+    compatibility_score DOUBLE PRECISION,
+    github_issue_url TEXT,
+    error TEXT,
+    created_at DOUBLE PRECISION NOT NULL,
+    completed_at DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id BIGSERIAL PRIMARY KEY,
+    investigation_id TEXT NOT NULL,
+    step TEXT NOT NULL,
+    message TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_inv ON agent_events (investigation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS test_runs (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL,
+    environment TEXT NOT NULL,                    -- baseline | candidate
+    container_name TEXT,
+    build_success BOOLEAN NOT NULL DEFAULT TRUE,
+    build_log TEXT,
+    startup_success BOOLEAN NOT NULL DEFAULT TRUE,
+    startup_log TEXT,
+    tests_passed INTEGER,
+    tests_failed INTEGER,
+    tests_errors INTEGER,
+    tests_total INTEGER,
+    pytest_summary TEXT,
+    workload_total_requests INTEGER,
+    workload_successful_requests INTEGER,
+    workload_error_rate DOUBLE PRECISION,
+    latency_p50_ms DOUBLE PRECISION,
+    latency_p95_ms DOUBLE PRECISION,
+    latency_p99_ms DOUBLE PRECISION,
+    throughput_rps DOUBLE PRECISION,
+    raw_output TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_runs_inv ON test_runs (investigation_id);
+
+CREATE TABLE IF NOT EXISTS comparisons (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,                        -- full compare object as JSON
+    functional_score DOUBLE PRECISION,
+    performance_score DOUBLE PRECISION,
+    overall_score DOUBLE PRECISION,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL UNIQUE,
+    verdict TEXT NOT NULL,
+    confidence DOUBLE PRECISION,
+    reasons TEXT NOT NULL,                        -- JSON array of strings
+    recommendation TEXT,
+    decided_by TEXT NOT NULL DEFAULT 'llm',       -- llm_groq | rule_based
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS actions (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL UNIQUE,
+    action_type TEXT NOT NULL DEFAULT 'github_issue',
+    success BOOLEAN NOT NULL DEFAULT FALSE,
+    skipped BOOLEAN NOT NULL DEFAULT FALSE,       -- TRUE when the caller supplied no GitHub token
+    skip_reason TEXT,
+    issue_url TEXT,
+    issue_number INTEGER,
+    verified BOOLEAN NOT NULL DEFAULT FALSE,
+    error TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS detected_changes (
+    id TEXT PRIMARY KEY,
+    dependency_name TEXT NOT NULL,
+    source TEXT NOT NULL,                         -- pypi | github
+    latest_version TEXT NOT NULL,
+    release_notes TEXT,
+    release_url TEXT,
+    published_at TEXT,
+    detected_at DOUBLE PRECISION NOT NULL,
+    triage_status TEXT NOT NULL DEFAULT 'pending', -- pending|accepted|skipped
+    triage_reason TEXT,
+    triage_mode TEXT,                              -- deterministic | llm
+    investigation_id TEXT,
+    UNIQUE (dependency_name, latest_version)
+);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+    name TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'pypi',          -- pypi | github
+    repo TEXT,                                    -- owner/repo when source=github
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    last_checked_at DOUBLE PRECISION,
+    last_seen_version TEXT,
+    added_at DOUBLE PRECISION NOT NULL
+);
