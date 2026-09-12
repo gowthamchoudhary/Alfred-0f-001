@@ -11,6 +11,7 @@ backend/alfred.db-*
 # --- frontend ---
 frontend/node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
 
 # --- editor/os ---
 .DS_Store
