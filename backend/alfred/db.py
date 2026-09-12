@@ -178,6 +178,13 @@ def _normalize_postgres_url(url: str) -> str:
     return url
 
 
+# This project's Supavisor pooler host (non-secret infrastructure config from
+# the Supabase dashboard). Needed because the direct host db.<ref>.supabase.co
+# is IPv6-only and IPv4-only environments cannot reach it. Override with the
+# SUPABASE_POOLER_HOST env var if the project moves regions.
+DEFAULT_POOLER_HOST = "aws-0-ap-northeast-2.pooler.supabase.com"
+
+
 def _apply_pooler(url: str) -> str:
     """Rewrite a direct-connection URL onto the Supabase pooler when configured.
 
@@ -189,7 +196,7 @@ def _apply_pooler(url: str) -> str:
     ``postgres.<project-ref>`` as the pooler requires. Password, database and
     port carry over unchanged. URLs already pointing at a pooler are untouched.
     """
-    host_override = os.environ.get("SUPABASE_POOLER_HOST", "").strip()
+    host_override = os.environ.get("SUPABASE_POOLER_HOST", "").strip() or DEFAULT_POOLER_HOST
     if not host_override:
         return url
     parsed = urlparse(url)

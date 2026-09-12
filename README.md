@@ -146,7 +146,7 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 | `EXA_API_KEY` | enables targeted web research (Exa) |
 | (no `GITHUB_TOKEN`) | GitHub credentials are **not** env vars — each caller supplies `github_token`/`github_owner`/`github_repo` with their investigation request (see Credentials above) |
 | `SUPABASE_DB_URL` | Supabase Postgres connection string (Project Settings → Database → Connection string, URI tab). When set, all investigation history persists to Supabase — outside this sandbox, so it survives workspace resets. Without it, Alfred falls back to a local SQLite file and warns. |
-| `SUPABASE_POOLER_HOST` | Optional. Supabase pooler host (e.g. `aws-0-ap-northeast-2.pooler.supabase.com`) from the dashboard's "Connection pooling" string. Needed in IPv4-only environments (like this sandbox) where the direct host (`db.<ref>.supabase.co`) is IPv6-only and unreachable; the username is rewritten to `postgres.<project-ref>` automatically. |
+| `SUPABASE_POOLER_HOST` | Optional. Supabase pooler host (e.g. `aws-0-ap-northeast-2.pooler.supabase.com`) from the dashboard's "Connection pooling" string. Needed in IPv4-only environments where the direct host (`db.<ref>.supabase.co`) is IPv6-only and unreachable; the username is rewritten to `postgres.<project-ref>` automatically. Defaults to this project's discovered pooler host, so no setup is normally required. |
 | `ALFRED_DB_PATH` | SQLite fallback location only (default `backend/alfred.db`); ignored when `SUPABASE_DB_URL` is set |
 | `ALFRED_POLL_INTERVAL` | discovery poll cadence in seconds (default 900) |
 
