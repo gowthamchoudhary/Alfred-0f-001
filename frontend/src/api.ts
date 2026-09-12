@@ -145,11 +145,21 @@ export const api = {
   health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
   investigations: () => get<Investigation[]>("/api/investigations"),
   investigationDetail: (id: string) => get<InvestigationDetail>(`/api/investigations/${id}`),
-  trigger: (repoSource: string, targetVersion: string, dependencyName?: string) =>
+  trigger: (
+    repoSource: string,
+    targetVersion: string,
+    dependencyName?: string,
+    github?: { token?: string; owner?: string; repo?: string },
+  ) =>
     post<{ investigation_id: string }>("/api/investigations", {
       repo_source: repoSource,
       target_version: targetVersion,
       dependency_name: dependencyName || null,
+      // Per-request credentials: used in-memory for this one investigation,
+      // never stored server-side.
+      github_token: github?.token || null,
+      github_owner: github?.owner || null,
+      github_repo: github?.repo || null,
     }),
   detectedChanges: () => get<DetectedChange[]>("/api/detected-changes"),
   watchlist: () => get<WatchlistEntry[]>("/api/watchlist"),

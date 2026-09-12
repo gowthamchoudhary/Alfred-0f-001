@@ -1,15 +1,19 @@
 """ACTION + VERIFY steps — post the verdict to GitHub as a real issue.
 
 Uses GitHub's own REST API (api.github.com) — the correct tool for writing to
-GitHub; no browser automation. Requires ``GITHUB_TOKEN`` in the environment.
-If absent the step is skipped cleanly and logged — never faked. VERIFY then
-GETs the created issue back to confirm it actually exists before the ACTION
-step is marked complete.
+GitHub; no browser automation.
+
+Credential model: the GitHub token is supplied PER REQUEST by whoever triggers
+the investigation (API/CLI/dashboard). It is never read from the environment,
+never stored in the database, never logged, and never returned in a response —
+it lives only in-memory for the duration of this call. If the caller provides
+no token (or no owner/repo), the step is skipped cleanly and logged — never
+faked. VERIFY then GETs the created issue back to confirm it actually exists
+before the ACTION step is marked complete.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import httpx
@@ -96,7 +100,9 @@ Decision source: {decision.get("decided_by", "unknown")}.*
 def post_github_issue(
     db: Database,
     investigation_id: str,
-    github_config: Any,
+    github_token: str | None,
+    github_owner: str | None,
+    github_repo: str | None,
     dependency_name: str,
     from_version: str,
     to_version: str,
@@ -105,25 +111,27 @@ def post_github_issue(
     research: dict | None = None,
     scores: dict | None = None,
 ) -> dict:
-    """POST the issue, then GET it back to VERIFY it exists."""
-    token = os.environ.get("GITHUB_TOKEN")
-    owner = getattr(github_config, "owner", None) or (github_config or {}).get("owner") if isinstance(github_config, dict) else getattr(github_config, "owner", None)
-    repo = getattr(github_config, "repo", None) or (github_config or {}).get("repo") if isinstance(github_config, dict) else getattr(github_config, "repo", None)
+    """POST the issue, then GET it back to VERIFY it exists.
 
-    if not token:
+    ``github_token``/``github_owner``/``github_repo`` are the per-request
+    credentials supplied by the caller — never persisted, never logged.
+    """
+    if not github_token:
         log_event(
             db, investigation_id, "ACTION",
-            "GITHUB_TOKEN not set; skipping GitHub issue creation (never faked)",
+            "no GitHub token provided for this investigation; skipping issue creation (never faked)",
             level="warn",
         )
-        return {"skipped": True, "skip_reason": "GITHUB_TOKEN not set", "success": False, "verified": False}
-    if not owner or not repo:
+        return {"skipped": True, "skip_reason": "no GitHub token provided for this investigation", "success": False, "verified": False}
+    if not github_owner or not github_repo:
         log_event(
             db, investigation_id, "ACTION",
-            "alfred.yaml github.owner/github.repo missing; skipping issue creation",
+            "github_owner/github_repo not provided for this investigation; skipping issue creation",
             level="warn",
         )
-        return {"skipped": True, "skip_reason": "github owner/repo not configured in alfred.yaml", "success": False, "verified": False}
+        return {"skipped": True, "skip_reason": "github_owner/github_repo not provided for this investigation", "success": False, "verified": False}
+
+    owner, repo = github_owner, github_repo
 
     title = f"[Alfred] {dependency_name} {from_version} → {to_version}: {decision.get('verdict', 'verdict')}"
     body = build_issue_body(
@@ -131,7 +139,7 @@ def post_github_issue(
     )
     url = f"{GITHUB_API}/repos/{owner}/{repo}/issues"
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }

@@ -4,10 +4,14 @@ A testable repo must contain, at its root:
     Dockerfile          required — must serve the app on $PORT
     requirements.txt    required — pinned versions; Alfred bumps the candidate
     tests/              required — pytest suite
-    alfred.yaml         required — workload + github config
+    alfred.yaml         required — workload config
 
 ``validate_repo`` enforces the contract; nothing about any single sample
 project is baked in here — Alfred works on any repo following the convention.
+
+Note: GitHub destination (owner/repo) and the GitHub token are NOT part of the
+repo contract — they are supplied per-request by whoever triggers the
+investigation, keeping credentials out of repos and out of Alfred.
 """
 
 from __future__ import annotations
@@ -33,17 +37,10 @@ class WorkloadConfig:
 
 
 @dataclass
-class GithubConfig:
-    owner: str | None = None
-    repo: str | None = None
-
-
-@dataclass
 class AlfredConfig:
     dependency_name: str
     current_version: str
     workload: WorkloadConfig
-    github: GithubConfig
 
 
 def validate_repo(repo_path: str) -> AlfredConfig:
@@ -87,12 +84,11 @@ def validate_repo(repo_path: str) -> AlfredConfig:
         requests=int(workload_raw.get("requests", 500)),
         payloads=list(workload_raw.get("payloads") or []),
     )
-    gh_raw = raw.get("github") or {}
-    github = GithubConfig(owner=gh_raw.get("owner"), repo=gh_raw.get("repo"))
+    # NOTE: a legacy "github:" section in alfred.yaml is intentionally ignored.
+    # Owner/repo and the token come from the per-request caller, not the repo.
 
     return AlfredConfig(
         dependency_name=str(name),
         current_version=str(current),
         workload=workload,
-        github=github,
     )

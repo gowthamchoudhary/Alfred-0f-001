@@ -22,6 +22,9 @@ function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
   const [dep, setDep] = useState("");
+  const [ghOwner, setGhOwner] = useState("");
+  const [ghRepo, setGhRepo] = useState("");
+  const [ghToken, setGhToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +33,12 @@ function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.trigger(repo.trim(), version.trim(), dep.trim() || undefined);
+      const res = await api.trigger(repo.trim(), version.trim(), dep.trim() || undefined, {
+        token: ghToken.trim() || undefined,
+        owner: ghOwner.trim() || undefined,
+        repo: ghRepo.trim() || undefined,
+      });
+      setGhToken("");
       onTriggered(res.investigation_id);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -71,6 +79,39 @@ function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
         <button type="submit" disabled={busy} className="btn-primary disabled:opacity-50">
           {busy ? "starting…" : "Investigate"}
         </button>
+      </div>
+      <div className="mt-3">
+        <p className="text-xs uppercase tracking-wider text-slate-500">
+          Post verdict to GitHub <span className="normal-case text-slate-600">(optional, per-run)</span>
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-[1fr_1fr_2fr]">
+          <input
+            className="input"
+            placeholder="github owner"
+            value={ghOwner}
+            onChange={(e) => setGhOwner(e.target.value)}
+            autoComplete="off"
+          />
+          <input
+            className="input"
+            placeholder="github repo"
+            value={ghRepo}
+            onChange={(e) => setGhRepo(e.target.value)}
+            autoComplete="off"
+          />
+          <input
+            className="input"
+            type="password"
+            placeholder="your GitHub PAT — used in-memory for this run only, never stored"
+            value={ghToken}
+            onChange={(e) => setGhToken(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+        <p className="mt-1.5 text-[11px] text-slate-600">
+          Your token is sent with this one request, held in memory for the duration of the run, and discarded — it is
+          never written to the database or logs. Leave it empty to skip the GitHub step.
+        </p>
       </div>
       {error && <p className="mt-2 text-xs text-signal-red">{error}</p>}
     </form>

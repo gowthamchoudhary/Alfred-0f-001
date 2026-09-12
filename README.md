@@ -45,7 +45,7 @@ repo/
 ├── Dockerfile          # required — must expose the app on $PORT
 ├── requirements.txt    # required — pinned versions; this gets bumped
 ├── tests/              # required — pytest suite
-└── alfred.yaml         # required — workload + github config
+└── alfred.yaml         # required — workload config
 ```
 
 ```yaml
@@ -59,10 +59,11 @@ workload:
   requests: 500
   payloads:
     - { "message": "Summarize this refund policy." }
-github:
-  owner: someuser
-  repo: customer-support-ai
 ```
+
+**GitHub destination is not part of the repo.** Whoever triggers an
+investigation supplies `github_owner` + `github_repo` — and their own token —
+per request (dashboard form, `POST /api/investigations`, or CLI flags).
 
 `examples/sample-repo/` is a *reference implementation of the contract* for
 validating installs — Alfred itself contains nothing repo-specific.
@@ -83,7 +84,8 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
   (≥95 SAFE, ≥80 SAFE_WITH_REVIEW, ≥60 MODERATE_RISK, else HIGH_RISK) — the
   pipeline never crashes from a missing key.
 * **ACTION** posts via GitHub's REST API; **VERIFY** GETs the issue back to
-  confirm it exists. Without `GITHUB_TOKEN` the step is skipped cleanly — never faked.
+  confirm it exists. Without a per-request GitHub token (supplied by whoever
+  triggers the investigation) the step is skipped cleanly — never faked.
 * **CLEANUP** always stops/removes both containers (try/finally), even on failure.
 * Build failure and startup failure are valid, reportable results — not crashes.
 * Every step logs `[HH:MM:SS] STEP_NAME   message` events (stdout + SQLite).
@@ -116,7 +118,8 @@ cd frontend && bun install && bun run dev         # proxies /api to :8000
 cd frontend && bun run build                      # → frontend/dist, served by FastAPI
 
 # CLI fallback / debug
-python -m alfred.cli investigate ./examples/sample-repo 2.1.0
+python -m alfred.cli investigate ./examples/sample-repo 2.1.0 \
+    --github-owner someuser --github-repo customer-support-ai --github-token ghp_xxx
 python -m alfred.cli poll
 ```
 
@@ -126,16 +129,29 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 | --- | --- |
 | `GROQ_API_KEY` | enables LLM reasoning + LLM triage checks (Groq free tier, used intentionally for cost) |
 | `EXA_API_KEY` | enables targeted web research (Exa) |
-| `GITHUB_TOKEN` | enables GitHub issue posting |
+| (no `GITHUB_TOKEN`) | GitHub credentials are **not** env vars — each caller supplies `github_token`/`github_owner`/`github_repo` with their investigation request (see Credentials above) |
 | `ALFRED_DB_PATH` | SQLite location (default `backend/alfred.db`) |
 | `ALFRED_POLL_INTERVAL` | discovery poll cadence in seconds (default 900) |
+
+## Credentials
+
+* `GROQ_API_KEY` — environment-level (one shared key, set by the operator);
+  used for every investigation's REASON (and triage) LLM calls. Never exposed
+  to or requested from end users.
+* **GitHub token — per-user, per-request.** Supplied by the caller on each
+  investigation (`github_token` + `github_owner` + `github_repo` in the API
+  request, CLI flags, or dashboard form). Used in-memory for that run's
+  ACTION/VERIFY steps only: never written to the database, never logged, never
+  returned in any API response. No token → the ACTION step skips cleanly.
 
 ## REST API
 
 ```
 GET    /api/health
 GET    /api/investigations            list (newest first)
-POST   /api/investigations            manual trigger {repo_source, target_version, dependency_name?}
+POST   /api/investigations            manual trigger {repo_source, target_version,
+                                      dependency_name?, github_token?,
+                                      github_owner?, github_repo?}
 GET    /api/investigations/{id}       full detail: events, runs, comparison, decision, action
 GET    /api/detected-changes          every discovered release, incl. skipped
 POST   /api/discovery/poll            force one discovery poll now

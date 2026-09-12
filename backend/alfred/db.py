@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS actions (
     investigation_id TEXT NOT NULL UNIQUE,
     action_type TEXT NOT NULL DEFAULT 'github_issue',
     success INTEGER NOT NULL DEFAULT 0,
-    skipped INTEGER NOT NULL DEFAULT 0,           -- 1 when GITHUB_TOKEN absent
+    skipped INTEGER NOT NULL DEFAULT 0,           -- 1 when the caller supplied no GitHub token
     skip_reason TEXT,
     issue_url TEXT,
     issue_number INTEGER,

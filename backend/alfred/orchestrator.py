@@ -58,13 +58,19 @@ def run_investigation(
     target_version: str,
     dependency_name: str | None = None,
     workload_config: Any = None,
-    github_config: Any = None,
+    github_token: str | None = None,
+    github_owner: str | None = None,
+    github_repo: str | None = None,
     trigger: str = "manual",
 ) -> str:
     """Execute the full pipeline for one dependency bump; returns investigation id.
 
-    ``dependency_name``/``workload_config``/``github_config`` override the
-    repo's alfred.yaml when provided (discovery passes the watched dep).
+    ``dependency_name``/``workload_config`` override the repo's alfred.yaml
+    when provided (discovery passes the watched dep).
+
+    ``github_token``/``github_owner``/``github_repo`` are PER-REQUEST user
+    credentials — used in-memory for ACTION/VERIFY only, never persisted or
+    logged. When the token is absent, ACTION is skipped cleanly.
     """
     if not _docker_available():
         raise DockerUnavailableError(
@@ -106,7 +112,6 @@ def run_investigation(
             )
 
         wl = workload_config or config.workload
-        gh = github_config or config.github
 
         db.update_investigation(inv_id, current_step="BUILD")
 
@@ -170,7 +175,7 @@ def run_investigation(
         # ---- RESEARCH (feeds REASON) ---------------------------------------
         research = research_dependency(
             db, inv_id, dep_name, baseline_version, target_version,
-            github_repo=f"{gh.owner}/{gh.repo}" if getattr(gh, "owner", None) and getattr(gh, "repo", None) else None,
+            github_repo=f"{github_owner}/{github_repo}" if github_owner and github_repo else None,
         )
 
         # ---- REASON --------------------------------------------------------
@@ -187,7 +192,8 @@ def run_investigation(
         # ---- ACTION + VERIFY ----------------------------------------------
         db.update_investigation(inv_id, current_step="ACTION")
         action = post_github_issue(
-            db, inv_id, gh, dep_name, baseline_version, target_version,
+            db, inv_id, github_token, github_owner, github_repo,
+            dep_name, baseline_version, target_version,
             comparison, decision, research, scores=comparison["scores"],
         )
         db.save_action(inv_id, action)

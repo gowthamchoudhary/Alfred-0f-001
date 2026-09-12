@@ -136,10 +136,19 @@ def triage_and_dispatch(
     change: dict[str, Any],
     repo_source: str,
     allow_llm: bool = True,
+    github_token: str | None = None,
+    github_owner: str | None = None,
+    github_repo: str | None = None,
 ) -> str | None:
     """Triage one detected change; auto-invoke run_investigation when accepted.
 
     Returns the investigation id when the pipeline ran, else None.
+
+    Credential model: discovery-triggered investigations carry no GitHub
+token (there is no user in the loop) — the pipeline runs fully and the
+ACTION step skips itself cleanly. Only user-initiated requests (API/CLI)
+supply per-request GitHub credentials, forwarded in-memory via the optional
+``github_token``/``github_owner``/``github_repo`` parameters.
     """
     name = change["dependency_name"]
     version = change["latest_version"]
@@ -181,6 +190,9 @@ def triage_and_dispatch(
             repo_source=repo_source,
             target_version=version,
             dependency_name=name,
+            github_token=github_token,
+            github_owner=github_owner,
+            github_repo=github_repo,
             trigger="discovery",
         )
         db.mark_change_triaged(change_id, "accepted", "investigation dispatched", "deterministic", investigation_id=inv_id)

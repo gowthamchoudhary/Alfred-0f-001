@@ -36,6 +36,8 @@ def test_health(client: TestClient):
     assert body["status"] == "ok"
     for key in ("groq_key", "github_token", "docker_available"):
         assert key in body
+    # GitHub is per-request now: the health endpoint must not report a global token
+    assert body["github_token"] != True
 
 
 def test_watchlist_seeded_and_crud(client: TestClient):
