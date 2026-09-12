@@ -24,7 +24,7 @@ import os
 from .db import Database
 from .events import log_event
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"  # current Groq free-tier JSON-capable model (llama-3.3-70b was retired by Groq)
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 MAX_TOKENS = 1000
 
