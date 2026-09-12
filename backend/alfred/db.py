@@ -37,12 +37,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -163,6 +165,54 @@ CREATE TABLE IF NOT EXISTS watchlist (
 _FALLBACK_WARNED = False
 
 
+def _normalize_postgres_url(url: str) -> str:
+    """Point plain Supabase/Postgres URLs at the psycopg (v3) driver.
+
+    SQLAlchemy maps bare ``postgresql://`` to psycopg2, which we don't ship;
+    Supabase hands out ``postgresql://`` (or legacy ``postgres://``) strings.
+    URLs that already carry a driver qualifier are left untouched.
+    """
+    scheme, _, rest = url.partition("://")
+    if scheme in ("postgres", "postgresql"):
+        return f"postgresql+psycopg://{rest}"
+    return url
+
+
+def _apply_pooler(url: str) -> str:
+    """Rewrite a direct-connection URL onto the Supabase pooler when configured.
+
+    Supabase's direct-connection host (db.<ref>.supabase.co) is IPv6-only;
+    IPv4-only environments (including this sandbox) cannot reach it. Supabase's
+    Supavisor pooler hosts are IPv4-compatible. Set SUPABASE_POOLER_HOST to the
+    host from the dashboard's "Connection pooling" string (e.g.
+    ``aws-0-ap-northeast-2.pooler.supabase.com``); the username becomes
+    ``postgres.<project-ref>`` as the pooler requires. Password, database and
+    port carry over unchanged. URLs already pointing at a pooler are untouched.
+    """
+    host_override = os.environ.get("SUPABASE_POOLER_HOST", "").strip()
+    if not host_override:
+        return url
+    parsed = urlparse(url)
+    if "pooler.supabase.com" in (parsed.hostname or ""):
+        return url  # already a pooler URL — nothing to do
+    ref = ""
+    match = re.match(r"^db\.([^.]+)\.supabase\.co$", parsed.hostname or "")
+    if match:
+        ref = match.group(1)
+    if not ref:
+        supa = urlparse(os.environ.get("SUPABASE_URL", ""))
+        ref = (supa.hostname or "").split(".")[0]
+    if not ref:
+        return url  # can't derive the pooler username — leave the URL alone
+    username = unquote(parsed.username or "postgres")
+    if "." not in username:
+        username = f"{username}.{ref}"
+    netloc = f"{username}:{quote(unquote(parsed.password or ''), safe='')}@{host_override}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 def _apply_schema(conn: Any, sql: str) -> None:
     """Execute a multi-statement schema script one statement at a time.
 
@@ -182,7 +232,7 @@ def _resolve_database_url() -> tuple[str, bool]:
     url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
     if url:
         if url.startswith("postgres"):
-            return url, True
+            return _apply_pooler(_normalize_postgres_url(url)), True
         return url, False  # explicit non-postgres URL — honor it
     sqlite_path = os.environ.get(
         "ALFRED_DB_PATH",
