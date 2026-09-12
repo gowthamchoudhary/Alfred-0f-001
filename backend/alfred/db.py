@@ -159,6 +159,19 @@ CREATE TABLE IF NOT EXISTS watchlist (
     last_seen_version TEXT,
     added_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 """
 
 
@@ -763,3 +776,63 @@ class Database:
                     ),
                     {"checked": time.time(), "version": last_seen_version, "name": name},
                 )
+
+    # ------------------------------------------------------------------ users
+    def create_user(self, email: str, password_hash: str) -> str:
+        user_id = self._new_id()
+        with _WRITE_LOCK:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, email, password_hash, created_at)"
+                        " VALUES (:id, :email, :hash, :created_at)"
+                    ),
+                    {"id": user_id, "email": email.lower().strip(), "hash": password_hash, "created_at": time.time()},
+                )
+        return user_id
+
+    def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM users WHERE email = :email"),
+                {"email": email.lower().strip()},
+            ).mappings().fetchone()
+            return self._row_to_dict(row)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT id, email, created_at FROM users WHERE id = :id"),
+                {"id": user_id},
+            ).mappings().fetchone()
+            return self._row_to_dict(row)
+
+    # --------------------------------------------------------------- sessions
+    def create_session(self, token_hash: str, user_id: str, ttl_seconds: float) -> None:
+        now = time.time()
+        with _WRITE_LOCK:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO sessions (token_hash, user_id, created_at, expires_at)"
+                        " VALUES (:token, :user, :created, :expires)"
+                    ),
+                    {"token": token_hash, "user": user_id, "created": now, "expires": now + ttl_seconds},
+                )
+
+    def get_session_user(self, token_hash: str) -> dict[str, Any] | None:
+        """Resolve a session token hash to its user; None when missing/expired."""
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id"
+                    " WHERE s.token_hash = :token AND s.expires_at > :now"
+                ),
+                {"token": token_hash, "now": time.time()},
+            ).mappings().fetchone()
+            return self._row_to_dict(row)
+
+    def delete_session(self, token_hash: str) -> None:
+        with _WRITE_LOCK:
+            with self.engine.begin() as conn:
+                conn.execute(text("DELETE FROM sessions WHERE token_hash = :token"), {"token": token_hash})
