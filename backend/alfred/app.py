@@ -131,7 +131,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "time": time.time(),
         "running": list(_running.keys()),
-        "anthropic_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "groq_key": bool(os.environ.get("GROQ_API_KEY")),
         "exa_key": bool(os.environ.get("EXA_API_KEY")),
         "github_token": bool(os.environ.get("GITHUB_TOKEN")),
         "docker_available": _quick_docker_probe(),

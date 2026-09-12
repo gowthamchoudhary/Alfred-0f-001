@@ -24,7 +24,7 @@ backend/alfred/
 ├── workload.py        WORKLOAD — real concurrent HTTP (httpx + asyncio), p50/p95/p99
 ├── compare.py         COMPARE  — deterministic deltas + compatibility score (no LLM)
 ├── research.py        RESEARCH — one targeted Exa search (fallback: PyPI/GitHub scrape)
-├── reason.py          REASON   — ONE Claude call, or deterministic rule-based fallback
+├── reason.py          REASON   — ONE Groq (llama-3.3-70b-versatile) call, or rule-based fallback
 ├── github_action.py   ACTION/VERIFY — REST issue create + GET-back verification
 ├── discovery.py       watchlist polling: PyPI RSS + GitHub releases
 ├── triage.py          deterministic filter (→ LLM only when ambiguous) → auto-invoke
@@ -77,8 +77,9 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
   `functional = tests_passed_cand / tests_passed_base`,
   `performance = 1 - max(0, (p95_cand - p95_base)/p95_base)`,
   `overall = 0.6*functional + 0.4*performance`
-* **REASON** is ONE Claude call (`claude-sonnet-4-5`) fed the real comparison +
-  web evidence; without `ANTHROPIC_API_KEY` it degrades to a rule-based verdict
+* **REASON** is ONE Groq call (`llama-3.3-70b-versatile`, via Groq's OpenAI-compatible
+  API) fed the real comparison + web evidence; without `GROQ_API_KEY` it degrades to a
+  rule-based verdict
   (≥95 SAFE, ≥80 SAFE_WITH_REVIEW, ≥60 MODERATE_RISK, else HIGH_RISK) — the
   pipeline never crashes from a missing key.
 * **ACTION** posts via GitHub's REST API; **VERIFY** GETs the issue back to
@@ -123,7 +124,7 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 
 | Var | Effect |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | enables LLM reasoning + LLM triage checks |
+| `GROQ_API_KEY` | enables LLM reasoning + LLM triage checks (Groq free tier, used intentionally for cost) |
 | `EXA_API_KEY` | enables targeted web research (Exa) |
 | `GITHUB_TOKEN` | enables GitHub issue posting |
 | `ALFRED_DB_PATH` | SQLite location (default `backend/alfred.db`) |

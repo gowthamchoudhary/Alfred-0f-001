@@ -34,7 +34,7 @@ def test_health(client: TestClient):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "ok"
-    for key in ("anthropic_key", "github_token", "docker_available"):
+    for key in ("groq_key", "github_token", "docker_available"):
         assert key in body
 
 

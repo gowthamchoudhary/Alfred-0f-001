@@ -36,7 +36,7 @@ if not os.environ.get("GITHUB_TOKEN"):
 else:
     print("[env] GITHUB_TOKEN: already present in process env", flush=True)
 
-for key in ("ANTHROPIC_API_KEY", "EXA_API_KEY"):
+for key in ("GROQ_API_KEY", "EXA_API_KEY"):
     print(f"[env] {key}: {'present in process env' if os.environ.get(key) else 'ABSENT'}", flush=True)
 
 

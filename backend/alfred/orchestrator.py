@@ -181,7 +181,7 @@ def run_investigation(
         db.save_decision(
             inv_id, decision["verdict"], decision["confidence"],
             decision["reasons"], decision["recommendation"],
-            decided_by="llm" if os.environ.get("ANTHROPIC_API_KEY") else "rule_based",
+            decided_by="llm_groq" if os.environ.get("GROQ_API_KEY") else "rule_based",
         )
 
         # ---- ACTION + VERIFY ----------------------------------------------
