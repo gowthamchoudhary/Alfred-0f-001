@@ -121,3 +121,23 @@ CREATE TABLE IF NOT EXISTS watchlist (
     last_seen_version TEXT,
     added_at DOUBLE PRECISION NOT NULL
 );
+
+-- Alfred accounts (email + password; no OAuth providers by design).
+-- password_hash is a salted PBKDF2 hash — never a plaintext password, and
+-- never a GitHub token (those stay per-request in memory).
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+-- Opaque session tokens. Only the SHA-256 hash of the token is stored, so a
+-- database leak cannot be replayed as a login.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
