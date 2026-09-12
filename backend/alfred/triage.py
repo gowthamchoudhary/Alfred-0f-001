@@ -7,7 +7,7 @@ Order of checks:
        * pre-release markers (a/b/rc/dev/post) → skip
        * backwards-only version (≤ already-known latest) → skip
   2. ambiguous cases fall through to ONE LLM relevance check (skipped
-     entirely when no ANTHROPIC_API_KEY — then only clearly-matching
+     entirely when no GROQ_API_KEY — then only clearly-matching
      deterministic signals trigger the pipeline).
 
 Only changes that pass triage auto-invoke run_investigation(). Skipped ones
@@ -91,13 +91,13 @@ def llm_relevance_check(
     dependency_name: str,
 ) -> tuple[bool, str]:
     """ONE LLM call for ambiguous cases; returns (relevant, reason)."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return (False, "no LLM key for ambiguous relevance check; treated as low relevance")
 
     import json
 
-    import anthropic
+    from openai import OpenAI  # Groq's API is OpenAI-compatible
 
     prompt = {
         "dependency": dependency_name,
@@ -111,14 +111,20 @@ def llm_relevance_check(
         ),
     }
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=300,
-            system="You are a precise release-triage assistant. Answer with JSON only.",
-            messages=[{"role": "user", "content": json.dumps(prompt)}],
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
         )
-        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a precise release-triage assistant. Answer with JSON only."},
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            max_tokens=300,
+            response_format={"type": "json_object"},
+        )
+        text = resp.choices[0].message.content or ""
         data = json.loads(text.strip().strip("`"))
         return (bool(data.get("relevant")), str(data.get("reason"))[:300])
     except Exception as exc:  # noqa: BLE001 — ambiguity must not crash triage
@@ -130,10 +136,19 @@ def triage_and_dispatch(
     change: dict[str, Any],
     repo_source: str,
     allow_llm: bool = True,
+    github_token: str | None = None,
+    github_owner: str | None = None,
+    github_repo: str | None = None,
 ) -> str | None:
     """Triage one detected change; auto-invoke run_investigation when accepted.
 
     Returns the investigation id when the pipeline ran, else None.
+
+    Credential model: discovery-triggered investigations carry no GitHub
+token (there is no user in the loop) — the pipeline runs fully and the
+ACTION step skips itself cleanly. Only user-initiated requests (API/CLI)
+supply per-request GitHub credentials, forwarded in-memory via the optional
+``github_token``/``github_owner``/``github_repo`` parameters.
     """
     name = change["dependency_name"]
     version = change["latest_version"]
@@ -175,6 +190,9 @@ def triage_and_dispatch(
             repo_source=repo_source,
             target_version=version,
             dependency_name=name,
+            github_token=github_token,
+            github_owner=github_owner,
+            github_repo=github_repo,
             trigger="discovery",
         )
         db.mark_change_triaged(change_id, "accepted", "investigation dispatched", "deterministic", investigation_id=inv_id)

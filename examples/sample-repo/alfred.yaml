@@ -10,5 +10,8 @@ workload:
     - { "message": "Summarize this refund policy." }
     - { "message": "What are your business hours?" }
 github:
+  # LEGACY — no longer read. Alfred now takes github_owner/github_repo (and the
+  # token) per request from whoever triggers the investigation, so credentials
+  # and destinations stay out of the repo. Kept only as a historical example.
   owner: gowthamchoudhary
   repo: Alfred-0f-001

@@ -3,12 +3,118 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  /* Alfred design tokens — mandatory editorial palette */
+  --bg: #d3d2cd;
+  --surface: #f1f0ec;
+  --surface-main: #f9f8f6;
+  --surface-secondary: #f0efeb;
+  --surface-warm: #f1efec;
+  --neutral-light: #f9f9f6;
+  --border: #e1dfdc;
+  --border-subtle: #eae9e6;
+  --text: #3c3c3b;
+}
+
+/* The landing page sits on the warm outer background */
+.alfred-shell {
+  background: var(--bg);
+  color: var(--text);
+  font-feature-settings: "tnum" 0;
 }
 
 body {
   @apply bg-ink-950 text-slate-200 antialiased;
-  font-feature-settings: "tnum";
+}
+
+/* Landing page overrides the dark body default */
+body:has(.alfred-shell) {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---------------- Animated orb (subtle, reduced-motion aware) -------------- */
+@keyframes orb-drift {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(1.5%, -2%, 0) rotate(2deg);
+  }
+  50% {
+    transform: translate3d(-1%, 1.5%, 0) rotate(-1.5deg);
+  }
+  75% {
+    transform: translate3d(2%, 1%, 0) rotate(1deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    filter: blur(14px) saturate(1);
+    opacity: 0.95;
+  }
+  50% {
+    filter: blur(18px) saturate(1.05);
+    opacity: 1;
+  }
+}
+
+.orb {
+  animation: orb-drift 26s ease-in-out infinite, orb-breathe 18s ease-in-out infinite;
+  will-change: transform, filter;
+}
+
+.orb-core {
+  background:
+    radial-gradient(circle at 38% 32%, #fbfaf7 0%, #f1efe9 34%, #e4e1da 62%, #d8d5cd 82%, #cfccc4 100%);
+}
+
+.orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 62% 68%, rgba(255, 255, 255, 0.5) 0%, transparent 42%),
+    radial-gradient(circle at 30% 75%, rgba(60, 60, 59, 0.06) 0%, transparent 55%);
+  mix-blend-mode: soft-light;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    animation: none;
+  }
+}
+
+/* Subtle entrance for hero/sections */
+@keyframes alfred-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.alfred-enter {
+  animation: alfred-fade-up 0.7s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .alfred-enter {
+    animation: none;
+  }
+}
+
+/* Existing dashboard card styles (kept intact for the app shell) */
+.app-dark {
+  color-scheme: dark;
 }
 
 .card {
@@ -35,9 +141,9 @@ body {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-thumb {
-  @apply rounded bg-ink-700;
-}
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded bg-ink-700;
 }

@@ -20,23 +20,22 @@ os.environ["ALFRED_REPO_TARGET"] = "/home/daytona/codebase/examples/sample-repo"
 os.environ["ALFRED_DB_PATH"] = "/home/daytona/codebase/backend/alfred.db"
 os.environ["ALFRED_DISABLE_POLLER"] = "1"  # single controlled run, no loop interference
 
-# GITHUB_TOKEN comes from the Freebuff-managed credential via its sanctioned
-# accessor (gh auth token) — never printed, only set in-process.
-if not os.environ.get("GITHUB_TOKEN"):
-    try:
-        proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=15)
-        tok = (proc.stdout or "").strip()
-        if proc.returncode == 0 and tok and not tok.startswith("gh:"):
-            os.environ["GITHUB_TOKEN"] = tok
-            print(f"[env] GITHUB_TOKEN: set from managed credential (len {len(tok)})", flush=True)
-        else:
-            print(f"[env] GITHUB_TOKEN: managed credential unavailable ({(proc.stderr or '')[:80]})", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[env] GITHUB_TOKEN: gh accessor failed: {exc}", flush=True)
-else:
-    print("[env] GITHUB_TOKEN: already present in process env", flush=True)
+# Credential model: GitHub credentials are PER-REQUEST. This driver acts as the
+# user and supplies the Freebuff-managed credential (via its sanctioned accessor,
+# `gh auth token`) as this one run's github_token — held in a local variable,
+# never printed, never written to env, db, or logs.
+GH_OWNER = "gowthamchoudhary"
+GH_REPO = "Alfred-0f-001"
+try:
+    proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=15)
+    tok = (proc.stdout or "").strip()
+    GH_TOKEN = tok if (proc.returncode == 0 and tok and not tok.startswith("gh:")) else None
+    print(f"[env] per-request github_token: {'acquired from managed credential (len ' + str(len(tok)) + ')' if GH_TOKEN else 'unavailable (' + (proc.stderr or '')[:80] + ') — ACTION will skip cleanly'}", flush=True)
+except Exception as exc:  # noqa: BLE001
+    GH_TOKEN = None
+    print(f"[env] per-request github_token: gh accessor failed: {exc}", flush=True)
 
-for key in ("ANTHROPIC_API_KEY", "EXA_API_KEY"):
+for key in ("GROQ_API_KEY", "EXA_API_KEY"):
     print(f"[env] {key}: {'present in process env' if os.environ.get(key) else 'ABSENT'}", flush=True)
 
 
@@ -76,7 +75,14 @@ holder: dict = {}
 
 def _dispatch() -> None:
     try:
-        holder["inv_id"] = triage_and_dispatch(db, row, repo_source=os.environ["ALFRED_REPO_TARGET"])
+        holder["inv_id"] = triage_and_dispatch(
+            db,
+            row,
+            repo_source=os.environ["ALFRED_REPO_TARGET"],
+            github_token=GH_TOKEN,
+            github_owner=GH_OWNER,
+            github_repo=GH_REPO,
+        )
     except Exception as exc:  # noqa: BLE001
         holder["error"] = repr(exc)
 

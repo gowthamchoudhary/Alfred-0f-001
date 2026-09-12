@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .auth import create_auth_router
 from .db import Database
 from .discovery import poll_once, start_poller, stop_poller
 from .events import recent_events
@@ -64,7 +65,9 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+app.include_router(create_auth_router(db))
 
 
 # --------------------------------------------------------------------- models
@@ -72,6 +75,12 @@ class TriggerRequest(BaseModel):
     repo_source: str = Field(..., description="Local path or git URL of a contract-compliant repo")
     target_version: str = Field(..., description="Dependency version to test as candidate")
     dependency_name: str | None = Field(None, description="Overrides alfred.yaml when set")
+    github_token: str | None = Field(
+        None,
+        description="Caller's own GitHub PAT, used in-memory for this one investigation only — never stored or logged",
+    )
+    github_owner: str | None = Field(None, description="Owner of the repo the verdict issue is posted to")
+    github_repo: str | None = Field(None, description="Repo the verdict issue is posted to")
 
 
 class WatchlistRequest(BaseModel):
@@ -86,8 +95,15 @@ def _dispatch_investigation(
     target_version: str,
     dependency_name: str | None,
     trigger: str,
+    github_token: str | None = None,
+    github_owner: str | None = None,
+    github_repo: str | None = None,
 ) -> str:
-    """Run the pipeline in a background thread; return the investigation id immediately."""
+    """Run the pipeline in a background thread; return the investigation id immediately.
+
+    ``github_token``/``github_owner``/``github_repo`` are forwarded to the
+    pipeline thread in memory only — never written to the database or logs.
+    """
     inv_holder: dict[str, str] = {}
 
     def _run() -> None:
@@ -97,6 +113,9 @@ def _dispatch_investigation(
                 repo_source=repo_source,
                 target_version=target_version,
                 dependency_name=dependency_name,
+                github_token=github_token,
+                github_owner=github_owner,
+                github_repo=github_repo,
                 trigger=trigger,
             )
             inv_holder["id"] = inv_id
@@ -131,9 +150,10 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "time": time.time(),
         "running": list(_running.keys()),
-        "anthropic_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "groq_key": bool(os.environ.get("GROQ_API_KEY")),
+        "github_token": "per-request (supplied by each investigation trigger)",
         "exa_key": bool(os.environ.get("EXA_API_KEY")),
-        "github_token": bool(os.environ.get("GITHUB_TOKEN")),
+        "persist_to_supabase": bool(getattr(db, "is_postgres", False)),
         "docker_available": _quick_docker_probe(),
     }
 
@@ -155,7 +175,13 @@ def list_investigations(limit: int = 50) -> list[dict[str, Any]]:
 @app.post("/api/investigations")
 def trigger_investigation(req: TriggerRequest) -> dict[str, Any]:
     inv_id = _dispatch_investigation(
-        req.repo_source, req.target_version, req.dependency_name, trigger="manual"
+        req.repo_source,
+        req.target_version,
+        req.dependency_name,
+        trigger="manual",
+        github_token=req.github_token,
+        github_owner=req.github_owner,
+        github_repo=req.github_repo,
     )
     return {"investigation_id": inv_id}
 

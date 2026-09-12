@@ -18,10 +18,95 @@ function fmtTime(t: number): string {
   });
 }
 
-function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
+function GithubConnectCard({
+  gh,
+  onConnect,
+  onDisconnect,
+}: {
+  gh: GithubConnection | null;
+  onConnect: (c: GithubConnection) => void;
+  onDisconnect: () => void;
+}) {
+  const [token, setToken] = useState("");
+  const [owner, setOwner] = useState("");
+  const [repoName, setRepoName] = useState("");
+
+  if (gh) {
+    return (
+      <div className="card">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">GitHub</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              connected — <span className="font-mono text-slate-300">{gh.owner}/{gh.repo}</span> · token held in
+              memory for this session only, never stored
+            </p>
+          </div>
+          <button onClick={onDisconnect} className="btn-ghost text-xs">
+            Disconnect
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const connect = () => {
+    if (!token.trim() || !owner.trim() || !repoName.trim()) return;
+    onConnect({ token: token.trim(), owner: owner.trim(), repo: repoName.trim() });
+    setToken("");
+  };
+
+  return (
+    <div className="card">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Connect GitHub</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        Alfred authenticates with email — GitHub is an integration, not a login. Your PAT is held
+        in memory for this session only; it is never written to the database or logs.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-[2fr_1fr_1fr_auto]">
+        <input
+          className="input"
+          type="password"
+          placeholder="Personal access token"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          autoComplete="off"
+        />
+        <input
+          className="input"
+          placeholder="owner"
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+          autoComplete="off"
+        />
+        <input
+          className="input"
+          placeholder="repo"
+          value={repoName}
+          onChange={(e) => setRepoName(e.target.value)}
+          autoComplete="off"
+        />
+        <button onClick={connect} className="btn-primary">
+          Connect
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TriggerForm({
+  onTriggered,
+  github,
+}: {
+  onTriggered: (id: string) => void;
+  github?: GithubConnection | null;
+}) {
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
   const [dep, setDep] = useState("");
+  const [ghOwner, setGhOwner] = useState(github?.owner ?? "");
+  const [ghRepo, setGhRepo] = useState(github?.repo ?? "");
+  const [ghToken, setGhToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +115,17 @@ function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.trigger(repo.trim(), version.trim(), dep.trim() || undefined);
+      // A connected GitHub session supplies the token in-memory; the manual
+      // PAT field is the per-run fallback when nothing is connected.
+      const token = github?.token || ghToken.trim() || undefined;
+      const owner = ghOwner.trim() || undefined;
+      const targetRepo = ghRepo.trim() || undefined;
+      const res = await api.trigger(repo.trim(), version.trim(), dep.trim() || undefined, {
+        token,
+        owner,
+        repo: targetRepo,
+      });
+      setGhToken("");
       onTriggered(res.investigation_id);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -71,6 +166,39 @@ function TriggerForm({ onTriggered }: { onTriggered: (id: string) => void }) {
         <button type="submit" disabled={busy} className="btn-primary disabled:opacity-50">
           {busy ? "starting…" : "Investigate"}
         </button>
+      </div>
+      <div className="mt-3">
+        <p className="text-xs uppercase tracking-wider text-slate-500">
+          Post verdict to GitHub <span className="normal-case text-slate-600">(optional, per-run)</span>
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-[1fr_1fr_2fr]">
+          <input
+            className="input"
+            placeholder="github owner"
+            value={ghOwner}
+            onChange={(e) => setGhOwner(e.target.value)}
+            autoComplete="off"
+          />
+          <input
+            className="input"
+            placeholder="github repo"
+            value={ghRepo}
+            onChange={(e) => setGhRepo(e.target.value)}
+            autoComplete="off"
+          />
+          <input
+            className="input"
+            type="password"
+            placeholder="your GitHub PAT — used in-memory for this run only, never stored"
+            value={ghToken}
+            onChange={(e) => setGhToken(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+        <p className="mt-1.5 text-[11px] text-slate-600">
+          Your token is sent with this one request, held in memory for the duration of the run, and discarded — it is
+          never written to the database or logs. Leave it empty to skip the GitHub step.
+        </p>
       </div>
       {error && <p className="mt-2 text-xs text-signal-red">{error}</p>}
     </form>
@@ -215,6 +343,12 @@ function SkippedChanges({ changes }: { changes: DetectedChange[] }) {
   );
 }
 
+export interface GithubConnection {
+  token: string;
+  owner: string;
+  repo: string;
+}
+
 export default function DashboardPage({
   onSelect,
   onTriggered,
@@ -224,6 +358,7 @@ export default function DashboardPage({
 }) {
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [changes, setChanges] = useState<DetectedChange[]>([]);
+  const [gh, setGh] = useState<GithubConnection | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -254,7 +389,9 @@ export default function DashboardPage({
         </p>
       </header>
 
-      <TriggerForm onTriggered={onTriggered} />
+      <GithubConnectCard gh={gh} onConnect={setGh} onDisconnect={() => setGh(null)} />
+
+      <TriggerForm onTriggered={onTriggered} github={gh} />
 
       <div className="card">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">

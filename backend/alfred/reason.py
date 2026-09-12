@@ -1,4 +1,4 @@
-"""REASON step — ONE LLM call (Claude) over real evidence.
+"""REASON step — ONE LLM call (Groq) over real evidence.
 
 The LLM receives the deterministic comparison object plus web evidence as
 ground truth and must reason over it — never invent numbers. Output is
@@ -7,7 +7,7 @@ structured JSON:
     { verdict: SAFE|SAFE_WITH_REVIEW|MODERATE_RISK|HIGH_RISK|INCOMPATIBLE,
       confidence: float, reasons: [...], recommendation: str }
 
-If ``ANTHROPIC_API_KEY`` is unset (or the call fails), a deterministic
+If ``GROQ_API_KEY`` is unset (or the call fails), a deterministic
 rule-based verdict is derived from the compatibility score:
 
     >= 95 SAFE | >= 80 SAFE_WITH_REVIEW | >= 60 MODERATE_RISK | else HIGH_RISK
@@ -24,8 +24,9 @@ import os
 from .db import Database
 from .events import log_event
 
-ANTHROPIC_MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 1500
+GROQ_MODEL = "openai/gpt-oss-120b"  # current Groq free-tier JSON-capable model (llama-3.3-70b was retired by Groq)
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+MAX_TOKENS = 1000
 
 VALID_VERDICTS = {"SAFE", "SAFE_WITH_REVIEW", "MODERATE_RISK", "HIGH_RISK", "INCOMPATIBLE"}
 
@@ -97,11 +98,11 @@ def reason_about_update(
     to_version: str,
 ) -> dict:
     """One LLM call when a key exists; deterministic rule-based fallback otherwise."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         log_event(
             db, investigation_id, "REASON",
-            "ANTHROPIC_API_KEY not set; using deterministic rule-based verdict",
+            "GROQ_API_KEY not set; using deterministic rule-based verdict",
             level="warn",
         )
         return _rule_based_verdict(comparison)
@@ -115,18 +116,21 @@ def reason_about_update(
         "web_evidence_source": (research or {}).get("source", "none"),
     }
 
-    log_event(db, investigation_id, "REASON", f"calling {ANTHROPIC_MODEL} with measured evidence")
+    log_event(db, investigation_id, "REASON", f"calling {GROQ_MODEL} with measured evidence")
     try:
-        import anthropic
+        from openai import OpenAI  # Groq's API is OpenAI-compatible
 
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model=ANTHROPIC_MODEL,
+        client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(user_payload)},
+            ],
             max_tokens=MAX_TOKENS,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": json.dumps(user_payload)}],
+            response_format={"type": "json_object"},
         )
-        text = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text")
+        text = response.choices[0].message.content or ""
     except Exception as exc:  # noqa: BLE001 — fall back rather than crash
         log_event(db, investigation_id, "REASON", f"LLM call failed ({exc}); using rule-based verdict", level="warn")
         return _rule_based_verdict(comparison)

@@ -209,15 +209,95 @@ def test_validate_repo_enforces_contract(tmp_path):
         "dependency:\n  name: openai\n  current: '1.0.0'\n"
         "workload:\n  endpoint: /chat\n  method: POST\n  concurrency: 5\n  requests: 10\n"
         "  payloads:\n    - message: hi\n"
-        "github:\n  owner: o\n  repo: r\n"
+        "github:\n  owner: o\n  repo: r\n"  # legacy section — ignored
     )
     cfg = validate_repo(str(tmp_path))
     assert cfg.dependency_name == "openai"
     assert cfg.workload.endpoint == "/chat"
-    assert cfg.github.owner == "o"
+    # GitHub destination is per-request now, never part of the parsed contract
+    assert not hasattr(cfg, "github")
 
 
 def test_validate_repo_rejects_missing_files(tmp_path):
     (tmp_path / "Dockerfile").write_text("x")
     with pytest.raises(RepoContractError):
         validate_repo(str(tmp_path))
+
+
+# -------------------------------------------------------- credential model
+def test_action_skips_cleanly_without_token(tmp_path):
+    """No user token for this investigation → honest skip, pipeline never fails."""
+    from alfred.github_action import post_github_issue
+
+    db = Database(os.path.join(tmp_path, "t.db"))
+    inv_id = db.create_investigation("openai", "1.0.0", "2.0.0", "/repo")
+    result = post_github_issue(
+        db, inv_id, None, "o", "r", "openai", "1.0.0", "2.0.0",
+        {"metrics": {}, "environment_health": {}},
+        {"verdict": "SAFE", "reasons": ["ok"], "recommendation": "go"},
+    )
+    assert result["skipped"] is True and result["success"] is False
+    assert "token" in result["skip_reason"]
+
+
+def test_action_skips_cleanly_without_owner_repo(tmp_path):
+    from alfred.github_action import post_github_issue
+
+    db = Database(os.path.join(tmp_path, "t.db"))
+    inv_id = db.create_investigation("openai", "1.0.0", "2.0.0", "/repo")
+    result = post_github_issue(
+        db, inv_id, "tok", None, None, "openai", "1.0.0", "2.0.0",
+        {"metrics": {}, "environment_health": {}},
+        {"verdict": "SAFE", "reasons": ["ok"], "recommendation": "go"},
+    )
+    assert result["skipped"] is True and result["success"] is False
+    assert "owner" in result["skip_reason"]
+
+
+def test_user_token_used_in_memory_only(tmp_path, monkeypatch):
+    """The per-request token is sent to GitHub, but never persisted, logged,
+    or returned — verified against the DB bytes, the event log, and the
+    stored action record."""
+    import json as _json
+
+    import alfred.github_action as gha
+
+    class FakeResp:
+        status_code = 201
+
+        def json(self):
+            return {"html_url": "https://github.com/o/r/issues/1", "number": 1}
+
+    captured: dict = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["auth"] = (headers or {}).get("Authorization", "")
+        return FakeResp()
+
+    monkeypatch.setattr(gha.httpx, "post", fake_post)
+    monkeypatch.setattr(gha.httpx, "get", lambda *a, **k: FakeResp())
+
+    db = Database(os.path.join(tmp_path, "t.db"))
+    inv_id = db.create_investigation("openai", "1.0.0", "2.0.0", "/repo")
+    secret = "ghp_SUPERSECRETVALUE"
+
+    result = gha.post_github_issue(
+        db, inv_id, secret, "o", "r", "openai", "1.0.0", "2.0.0",
+        {"metrics": {}, "environment_health": {"baseline": {}, "candidate": {}}},
+        {"verdict": "SAFE", "reasons": ["ok"], "recommendation": "go", "decided_by": "rule_based"},
+        research=None,
+        scores={"overall_score": 1.0, "functional_score": 1.0, "performance_score": 1.0},
+    )
+
+    # the token WAS used in-memory for the API call
+    assert result["success"] is True
+    assert captured["auth"] == f"Bearer {secret}"
+    assert captured["url"].startswith("https://api.github.com/repos/o/r/issues")
+
+    # …and never written anywhere
+    db.save_action(inv_id, result)
+    for p in tmp_path.glob("t.db*"):
+        assert secret not in p.read_bytes().decode("latin-1"), f"token leaked into {p.name}"
+    assert all(secret not in e["message"] for e in db.list_events(inv_id))
+    assert secret not in _json.dumps(db.get_action(inv_id))

@@ -5,9 +5,14 @@ for one-off debugging and CI-style invocation.
 
 Examples:
     python -m alfred.cli investigate ./sample-repo 2.3.0
-    python -m alfred.cli investigate https://github.com/user/repo 1.2.3 --dep openai
+    python -m alfred.cli investigate https://github.com/user/repo 1.2.3 --dep openai \
+        --github-owner user --github-repo repo --github-token ghp_xxx
     python -m alfred.cli poll
     python -m alfred.cli serve
+
+GitHub credentials are PER-REQUEST: pass your own token/owner/repo to post the
+verdict issue. They are used in-memory for that one run only — never stored or
+logged. Without a token, the ACTION step skips cleanly.
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ def cmd_investigate(args: argparse.Namespace) -> int:
             repo_source=args.repo,
             target_version=args.version,
             dependency_name=args.dep,
+            github_token=args.github_token,
+            github_owner=args.github_owner,
+            github_repo=args.github_repo,
             trigger="manual",
         )
         inv = db.get_investigation(inv_id)
@@ -81,6 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
     inv.add_argument("repo", help="local path or git URL of a contract-compliant repo")
     inv.add_argument("version", help="target dependency version for the candidate environment")
     inv.add_argument("--dep", help="dependency name override (defaults to alfred.yaml)")
+    inv.add_argument("--github-owner", help="owner of the repo the verdict issue is posted to")
+    inv.add_argument("--github-repo", help="repo the verdict issue is posted to")
+    inv.add_argument(
+        "--github-token",
+        help="your own GitHub PAT — used in-memory for this run only, never stored or logged",
+    )
     inv.set_defaults(func=cmd_investigate)
 
     poll = sub.add_parser("poll", help="run one discovery poll now")

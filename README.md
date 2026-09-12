@@ -24,13 +24,14 @@ backend/alfred/
 ├── workload.py        WORKLOAD — real concurrent HTTP (httpx + asyncio), p50/p95/p99
 ├── compare.py         COMPARE  — deterministic deltas + compatibility score (no LLM)
 ├── research.py        RESEARCH — one targeted Exa search (fallback: PyPI/GitHub scrape)
-├── reason.py          REASON   — ONE Claude call, or deterministic rule-based fallback
+├── reason.py          REASON   — ONE Groq (openai/gpt-oss-120b) call, or rule-based fallback
 ├── github_action.py   ACTION/VERIFY — REST issue create + GET-back verification
 ├── discovery.py       watchlist polling: PyPI RSS + GitHub releases
 ├── triage.py          deterministic filter (→ LLM only when ambiguous) → auto-invoke
 ├── contract.py        the repo contract validator (no demo app baked in)
-├── db.py              SQLite: investigations, agent_events, test_runs,
-│                      comparisons, decisions, actions, detected_changes, watchlist
+├── db.py              persistence: Supabase (hosted Postgres, SQLAlchemy) with a
+│                      local SQLite fallback for dev/tests
+├── db/schema.sql      the canonical Postgres schema, applied idempotently on startup
 ├── app.py             FastAPI REST API + static dashboard serving
 └── cli.py             manual trigger fallback / debug tool
 frontend/              React + Tailwind dashboard (polling, no websockets)
@@ -45,7 +46,7 @@ repo/
 ├── Dockerfile          # required — must expose the app on $PORT
 ├── requirements.txt    # required — pinned versions; this gets bumped
 ├── tests/              # required — pytest suite
-└── alfred.yaml         # required — workload + github config
+└── alfred.yaml         # required — workload config
 ```
 
 ```yaml
@@ -59,10 +60,11 @@ workload:
   requests: 500
   payloads:
     - { "message": "Summarize this refund policy." }
-github:
-  owner: someuser
-  repo: customer-support-ai
 ```
+
+**GitHub destination is not part of the repo.** Whoever triggers an
+investigation supplies `github_owner` + `github_repo` — and their own token —
+per request (dashboard form, `POST /api/investigations`, or CLI flags).
 
 `examples/sample-repo/` is a *reference implementation of the contract* for
 validating installs — Alfred itself contains nothing repo-specific.
@@ -77,12 +79,15 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
   `functional = tests_passed_cand / tests_passed_base`,
   `performance = 1 - max(0, (p95_cand - p95_base)/p95_base)`,
   `overall = 0.6*functional + 0.4*performance`
-* **REASON** is ONE Claude call (`claude-sonnet-4-5`) fed the real comparison +
-  web evidence; without `ANTHROPIC_API_KEY` it degrades to a rule-based verdict
+* **REASON** is ONE Groq call (`openai/gpt-oss-120b` — Groq's free-tier JSON-capable
+  model, replacing the retired `llama-3.3-70b-versatile`; via Groq's OpenAI-compatible
+  API) fed the real comparison + web evidence; without `GROQ_API_KEY` it degrades to a
+  rule-based verdict
   (≥95 SAFE, ≥80 SAFE_WITH_REVIEW, ≥60 MODERATE_RISK, else HIGH_RISK) — the
   pipeline never crashes from a missing key.
 * **ACTION** posts via GitHub's REST API; **VERIFY** GETs the issue back to
-  confirm it exists. Without `GITHUB_TOKEN` the step is skipped cleanly — never faked.
+  confirm it exists. Without a per-request GitHub token (supplied by whoever
+  triggers the investigation) the step is skipped cleanly — never faked.
 * **CLEANUP** always stops/removes both containers (try/finally), even on failure.
 * Build failure and startup failure are valid, reportable results — not crashes.
 * Every step logs `[HH:MM:SS] STEP_NAME   message` events (stdout + SQLite).
@@ -101,6 +106,19 @@ PREPARE → BUILD → RUN → TEST → WORKLOAD → COMPARE → REASON → ACTIO
 4. Accepted changes auto-invoke `run_investigation()` — this replaces manual
    CLI triggering as the primary path.
 
+## Persistence
+
+Alfred stores all pipeline data in **Supabase (hosted Postgres)** so history
+survives sandbox resets. The canonical schema is
+[`backend/db/schema.sql`](backend/db/schema.sql) — applied automatically and
+idempotently at startup. **There is deliberately no column anywhere in the
+schema for credentials**: GitHub tokens are per-request and used in-memory
+only, `GROQ_API_KEY`/`EXA_API_KEY` stay in the environment; only results
+(issue URLs, verified flags, metrics, verdicts) are ever written.
+
+Without `SUPABASE_DB_URL` Alfred falls back to a local SQLite file (same
+schema, warns at startup) so dev and unit tests need no credentials.
+
 ## Running
 
 ```bash
@@ -115,7 +133,8 @@ cd frontend && bun install && bun run dev         # proxies /api to :8000
 cd frontend && bun run build                      # → frontend/dist, served by FastAPI
 
 # CLI fallback / debug
-python -m alfred.cli investigate ./examples/sample-repo 2.1.0
+python -m alfred.cli investigate ./examples/sample-repo 2.1.0 \
+    --github-owner someuser --github-repo customer-support-ai --github-token ghp_xxx
 python -m alfred.cli poll
 ```
 
@@ -123,18 +142,33 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 
 | Var | Effect |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | enables LLM reasoning + LLM triage checks |
+| `GROQ_API_KEY` | enables LLM reasoning + LLM triage checks (Groq free tier, used intentionally for cost) |
 | `EXA_API_KEY` | enables targeted web research (Exa) |
-| `GITHUB_TOKEN` | enables GitHub issue posting |
-| `ALFRED_DB_PATH` | SQLite location (default `backend/alfred.db`) |
+| (no `GITHUB_TOKEN`) | GitHub credentials are **not** env vars — each caller supplies `github_token`/`github_owner`/`github_repo` with their investigation request (see Credentials above) |
+| `SUPABASE_DB_URL` | Supabase Postgres connection string (Project Settings → Database → Connection string, URI tab). When set, all investigation history persists to Supabase — outside this sandbox, so it survives workspace resets. Without it, Alfred falls back to a local SQLite file and warns. |
+| `SUPABASE_POOLER_HOST` | Optional. Supabase pooler host (e.g. `aws-0-ap-northeast-2.pooler.supabase.com`) from the dashboard's "Connection pooling" string. Needed in IPv4-only environments where the direct host (`db.<ref>.supabase.co`) is IPv6-only and unreachable; the username is rewritten to `postgres.<project-ref>` automatically. Defaults to this project's discovered pooler host, so no setup is normally required. |
+| `ALFRED_DB_PATH` | SQLite fallback location only (default `backend/alfred.db`); ignored when `SUPABASE_DB_URL` is set |
 | `ALFRED_POLL_INTERVAL` | discovery poll cadence in seconds (default 900) |
+
+## Credentials
+
+* `GROQ_API_KEY` — environment-level (one shared key, set by the operator);
+  used for every investigation's REASON (and triage) LLM calls. Never exposed
+  to or requested from end users.
+* **GitHub token — per-user, per-request.** Supplied by the caller on each
+  investigation (`github_token` + `github_owner` + `github_repo` in the API
+  request, CLI flags, or dashboard form). Used in-memory for that run's
+  ACTION/VERIFY steps only: never written to the database, never logged, never
+  returned in any API response. No token → the ACTION step skips cleanly.
 
 ## REST API
 
 ```
 GET    /api/health
 GET    /api/investigations            list (newest first)
-POST   /api/investigations            manual trigger {repo_source, target_version, dependency_name?}
+POST   /api/investigations            manual trigger {repo_source, target_version,
+                                      dependency_name?, github_token?,
+                                      github_owner?, github_repo?}
 GET    /api/investigations/{id}       full detail: events, runs, comparison, decision, action
 GET    /api/detected-changes          every discovered release, incl. skipped
 POST   /api/discovery/poll            force one discovery poll now
