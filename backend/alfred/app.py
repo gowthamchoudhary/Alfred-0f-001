@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .auth import create_auth_router
 from .db import Database
 from .discovery import poll_once, start_poller, stop_poller
 from .events import recent_events
@@ -64,7 +65,9 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+app.include_router(create_auth_router(db))
 
 
 # --------------------------------------------------------------------- models
