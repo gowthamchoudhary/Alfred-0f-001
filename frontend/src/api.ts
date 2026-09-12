@@ -141,7 +141,22 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+export interface AuthUser {
+  id: string;
+  email: string;
+}
+
 export const api = {
+  // ---- auth (email + password; session cookie set by the server) ----
+  signup: (email: string, password: string) =>
+    post<{ user: AuthUser }>("/api/auth/signup", { email, password }),
+  login: (email: string, password: string) =>
+    post<{ user: AuthUser }>("/api/auth/login", { email, password }),
+  logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
+  me: () =>
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? (r.json() as Promise<{ user: AuthUser }>) : null))
+      .catch(() => null),
   health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
   investigations: () => get<Investigation[]>("/api/investigations"),
   investigationDetail: (id: string) => get<InvestigationDetail>(`/api/investigations/${id}`),
