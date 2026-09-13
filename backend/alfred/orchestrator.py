@@ -62,6 +62,7 @@ def run_investigation(
     github_owner: str | None = None,
     github_repo: str | None = None,
     trigger: str = "manual",
+    user_id: str | None = None,
 ) -> str:
     """Execute the full pipeline for one dependency bump; returns investigation id.
 
@@ -97,6 +98,7 @@ def run_investigation(
             candidate_version=target_version,
             repo_source=repo_source,
             trigger=trigger,
+            user_id=user_id,
         )
         db.log_event(inv_id, "PREPARE", f"staged baseline and candidate copies from {repo_source}")
         if staged["bump_applied"]:
