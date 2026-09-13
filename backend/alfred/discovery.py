@@ -1,6 +1,10 @@
 """DISCOVERY — watch a configurable list of dependencies for new releases.
 
-Sources:
+PRIMARY: Anakin Website-Monitoring-style watch — for GitHub-hosted deps we
+run the Wire ``gh_repo_releases`` action (github_public catalog) on the poll
+cadence; this is the sponsor-integrated discovery mechanism. The result and
+its provenance are logged with the ``anakin`` marker for the dashboard.
+FALLBACK (unchanged, still reliable):
   * pip packages: PyPI RSS feed https://pypi.org/rss/project/{name}/releases.xml
   * GitHub-hosted deps: GitHub releases API (repos/{repo}/releases)
 
@@ -20,10 +24,12 @@ from datetime import datetime, timezone
 
 import httpx
 
+from .anakin import anakin_api_key, wire_task
 from .db import Database
 from .events import log_event
 
 POLL_INTERVAL = 900  # 15 minutes; overridable via ALFRED_POLL_INTERVAL
+WIRE_GH_RELEASES_ACTION = "gh_repo_releases"  # github_public catalog (read-only)
 # Where triage-accepted investigations get their repo from. Set
 # ALFRED_REPO_TARGET to a local path or git URL of a contract-compliant repo;
 # when unset (or docker is unavailable) accepted changes stay 'pending' so the
@@ -68,8 +74,39 @@ def fetch_pypi_releases(package: str) -> list[dict]:
     return out
 
 
+def fetch_github_releases_anakin(api_key: str, repo: str) -> list[dict]:
+    """PRIMARY GitHub discovery: Wire ``gh_repo_releases`` (github_public catalog).
+
+    Same row shape as the REST fallback so ``poll_once`` treats them
+    identically; returns [] on any failure so the fallback can take over.
+    """
+    raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"repo": repo})
+    if not raw or (raw.get("status") or "").lower() in ("failed", "error", "cancelled", "canceled"):
+        return []
+    result = raw.get("result") or raw.get("data") or raw.get("output") or {}
+    releases = result if isinstance(result, list) else (result.get("releases") or result.get("items") or [])
+    if not isinstance(releases, list):
+        return []
+    out: list[dict] = []
+    for rel in releases[:5]:
+        if not isinstance(rel, dict):
+            continue
+        tag = str(rel.get("tag_name") or rel.get("tag") or "").lstrip("v").strip()
+        if not tag:
+            continue
+        out.append(
+            {
+                "latest_version": tag,
+                "release_notes": str(rel.get("body") or rel.get("notes") or "")[:2000],
+                "release_url": rel.get("html_url") or rel.get("url") or f"https://github.com/{repo}/releases/tag/{tag}",
+                "published_at": rel.get("published_at") or rel.get("published"),
+            }
+        )
+    return out
+
+
 def fetch_github_releases(repo: str) -> list[dict]:
-    """Return recent releases for a GitHub repo via the REST API."""
+    """FALLBACK GitHub discovery: direct REST call."""
     url = f"https://api.github.com/repos/{repo}/releases?per_page=5"
     try:
         resp = httpx.get(url, timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
@@ -114,14 +151,26 @@ def poll_once(db: Database) -> int:
         if not entry.get("enabled"):
             continue
         name = entry["name"]
+        source_used = entry["source"]
+        releases: list[dict] = []
         if entry["source"] == "github" and entry.get("repo"):
-            releases = fetch_github_releases(entry["repo"])
+            api_key = anakin_api_key()
+            if api_key:
+                releases = fetch_github_releases_anakin(api_key, entry["repo"])
+                if releases:
+                    source_used = "anakin"
+                else:
+                    print(f"[discovery] anakin wire returned nothing for {entry['repo']}; REST fallback", flush=True)
+            else:
+                print("[discovery] ANAKIN_API_KEY not set; REST fallback for github dep", flush=True)
+            if not releases:
+                releases = fetch_github_releases(entry["repo"])
         else:
             releases = fetch_pypi_releases(name)
         for rel in releases[:3]:
             change = {
                 "dependency_name": name,
-                "source": entry["source"],
+                "source": source_used,
                 "latest_version": rel["latest_version"],
                 "release_notes": rel.get("release_notes"),
                 "release_url": rel.get("release_url"),
