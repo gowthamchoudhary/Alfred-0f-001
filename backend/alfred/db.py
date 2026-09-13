@@ -238,13 +238,18 @@ def _apply_pooler(url: str) -> str:
 def _apply_schema(conn: Any, sql: str) -> None:
     """Execute a multi-statement schema script one statement at a time.
 
+    Line comments are stripped BEFORE splitting on ``;`` — a semicolon inside
+    a ``--`` comment (e.g. prose like "email + password; no OAuth providers")
+    would otherwise split the script mid-comment, leak the comment tail into
+    the next statement, and crash Postgres with a syntax error at startup.
     Works on both drivers: sqlite3's ``execute`` refuses multi-statement
-    strings, and splitting lets comment lines ride along safely on both.
+    strings, and per-statement execution keeps both backends on one path.
     """
-    for stmt in sql.split(";"):
-        cleaned = "\n".join(
-            ln for ln in stmt.splitlines() if not ln.strip().startswith("--")
-        ).strip()
+    stripped = "\n".join(
+        ln for ln in sql.splitlines() if not ln.strip().startswith("--")
+    )
+    for stmt in stripped.split(";"):
+        cleaned = stmt.strip()
         if cleaned:
             conn.execute(text(cleaned))
 
