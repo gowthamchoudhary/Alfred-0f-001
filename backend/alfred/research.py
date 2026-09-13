@@ -1,28 +1,37 @@
-"""RESEARCH step — one targeted web search per investigation.
+"""RESEARCH step — Anakin-powered evidence gathering.
 
-Gathers release-notes / migration-guide / breaking-changes context for the
-specific version bump being tested, to feed the REASON step as ground truth.
+For every investigation Anakin is called at two levels (both need
+``ANAKIN_API_KEY``):
 
-Primary path: Exa search API (needs ``EXA_API_KEY``), one call, results
-include highlights. Fallback (no key): direct scrape of the package's PyPI
-release page / GitHub release page — still real evidence, just narrower.
-The pipeline must never crash or block on research; failures are logged and
-returned as empty evidence.
+  a. ``POST /wire/task`` (``github_public`` catalog, ``gh_repo_releases``
+     action) — structured release data for the dependency under test when it
+     is GitHub-hosted.
+  b. ``POST /agentic-search`` — ONE multi-stage research job for
+     migration-guide / breaking-change context on the exact version bump
+     (chosen over plain /search because its synthesis produces better
+     evidence text for the reasoning step).
+
+Whatever comes back is folded into ``evidence_text`` — the contract with the
+REASON step is unchanged. When Anakin is unavailable or both calls fail, the
+PyPI/GitHub direct scrape remains as a real-evidence fallback; the pipeline
+never crashes or blocks on research. The previous web-search provider and all
+of its code paths have been fully removed — Anakin is the research provider.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import httpx
 
+from .anakin import agentic_search, anakin_api_key, search, wire_task
 from .db import Database
 from .events import log_event
 
-EXA_ENDPOINT = "https://api.exa.ai/search"
 SEARCH_TIMEOUT = 20.0
-USER_AGENT = "Alfred-ReleaseImpactAgent/0.1 (release research; contact: alfred local)"
+USER_AGENT = "Alfred-ReleaseImpactAgent/0.1 (release research)"
+WIRE_GH_RELEASES_ACTION = "gh_repo_releases"  # github_public catalog (read-only)
+MAX_EVIDENCE_CHARS = 8000
 
 
 def research_dependency(
@@ -33,66 +42,135 @@ def research_dependency(
     to_version: str,
     github_repo: str | None = None,
 ) -> dict:
-    """Return {'source': 'exa'|'fallback'|'none', 'evidence_text': str, 'urls': [...]}."""
-    query = (
-        f"{dependency_name} python {to_version} release notes breaking changes migration guide "
-        f"upgrade from {from_version}"
+    """Return {'source': 'anakin'|'fallback'|'none', 'evidence_text': str, 'urls': [...]}."""
+    api_key = anakin_api_key()
+    if not api_key:
+        log_event(
+            db, investigation_id, "RESEARCH",
+            "ANAKIN_API_KEY not set — falling back to direct PyPI/GitHub scrape",
+            level="warn",
+        )
+        return _fallback_scrape(db, investigation_id, dependency_name, from_version, to_version, github_repo)
+
+    chunks: list[str] = []
+    urls: list[str] = []
+
+    # ---- (a) Wire: structured release data for GitHub-hosted deps ----------
+    wire_raw: dict[str, Any] | None = None
+    if github_repo:
+        log_event(db, investigation_id, "RESEARCH", f"anakin wire gh_repo_releases: {github_repo}")
+        wire_raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"repo": github_repo})
+        if wire_raw and (wire_raw.get("status") or "completed") not in ("failed", "error"):
+            chunk, wire_urls = _wire_chunk(wire_raw, dependency_name, to_version, github_repo)
+            if chunk:
+                chunks.append(chunk)
+                urls.extend(wire_urls)
+                log_event(
+                    db, investigation_id, "RESEARCH",
+                    f"wire gh_repo_releases returned {len(wire_urls)} source(s) for {github_repo}",
+                )
+            else:
+                log_event(db, investigation_id, "RESEARCH", "wire result had no usable release data", level="warn")
+        else:
+            log_event(db, investigation_id, "RESEARCH", f"wire gh_repo_releases failed for {github_repo}", level="warn")
+
+    # ---- (b) Agentic search: migration/breaking-change context -------------
+    prompt = (
+        f"{dependency_name} python library upgrade from {from_version} to {to_version}: "
+        f"official release notes, breaking changes, deprecations, and migration guide"
     )
-    api_key = None
-    try:
-        import os
+    log_event(db, investigation_id, "RESEARCH", f"anakin agentic-search: {prompt[:100]}")
+    agentic_raw = agentic_search(api_key, prompt)
+    agentic_answer = _agentic_answer(agentic_raw) if agentic_raw else None
+    if agentic_answer:
+        chunks.append(f"## Anakin agentic research\n{agentic_answer}")
+        for r in (agentic_raw.get("result") or {}).get("sources") or agentic_raw.get("sources") or []:
+            if isinstance(r, dict) and r.get("url"):
+                urls.append(r["url"])
+        log_event(db, investigation_id, "RESEARCH", "agentic-search completed with synthesized evidence")
+    else:
+        # Graceful degradation INSIDE Anakin: one synchronous /search call.
+        log_event(db, investigation_id, "RESEARCH", "agentic-search did not settle; trying synchronous /search", level="warn")
+        sync = search(api_key, prompt, limit=5)
+        if sync and sync.get("results"):
+            for r in sync["results"][:5]:
+                title, url, snippet = r.get("title") or "", r.get("url") or "", r.get("snippet") or ""
+                chunks.append(f"## {title}\n{url}\n{snippet}")
+                if url:
+                    urls.append(url)
+            log_event(db, investigation_id, "RESEARCH", f"collected {len(chunks)} sources via anakin /search")
+        else:
+            log_event(db, investigation_id, "RESEARCH", "anakin search returned no evidence", level="warn")
 
-        api_key = os.environ.get("EXA_API_KEY")
-    except Exception:  # pragma: no cover
-        pass
+    if chunks:
+        evidence = "\n\n".join(chunks)[:MAX_EVIDENCE_CHARS]
+        return {"source": "anakin", "evidence_text": evidence, "urls": urls[:20], "anakin_raw": _trimmed_raw(wire_raw, agentic_raw)}
 
-    if api_key:
-        result = _search_exa(db, investigation_id, query, api_key)
-        if result:
-            return result
-
+    log_event(
+        db, investigation_id, "RESEARCH",
+        "anakin produced no evidence; REASON will rely on measured data only",
+        level="warn",
+    )
     return _fallback_scrape(db, investigation_id, dependency_name, from_version, to_version, github_repo)
 
 
-def _search_exa(db: Database, investigation_id: str, query: str, api_key: str) -> dict | None:
-    log_event(db, investigation_id, "RESEARCH", f"exa search: {query[:100]}")
-    try:
-        resp = httpx.post(
-            EXA_ENDPOINT,
-            headers={"x-api-key": api_key, "Content-Type": "application/json"},
-            json={
-                "query": query,
-                "numResults": 4,
-                "contents": {"highlights": {"numSentences": 3}, "text": {"maxCharacters": 1200}},
-            },
-            timeout=SEARCH_TIMEOUT,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as exc:  # noqa: BLE001 — research must never block the pipeline
-        log_event(db, investigation_id, "RESEARCH", f"exa search failed: {exc}", level="warn")
-        return None
-
-    results = payload.get("results") or []
-    chunks: list[str] = []
-    urls: list[str] = []
-    for item in results[:4]:
-        title = item.get("title") or ""
-        url = item.get("url") or ""
-        highlights = item.get("highlights") or []
-        text = item.get("text") or ""
-        chunk = f"## {title}\n{url}\n" + "\n".join(highlights[:2] or [text[:600]])
-        chunks.append(chunk)
+def _wire_chunk(
+    wire_raw: dict[str, Any],
+    dependency_name: str,
+    to_version: str,
+    github_repo: str,
+) -> tuple[str, list[str]]:
+    """Extract a release-notes chunk + urls from a gh_repo_releases job result."""
+    result = wire_raw.get("result") or wire_raw.get("data") or wire_raw.get("output") or {}
+    releases = result if isinstance(result, list) else (result.get("releases") or result.get("items") or [])
+    if not isinstance(releases, list):
+        releases = [releases]
+    lines: list[str] = [f"## Wire gh_repo_releases — {github_repo}"]
+    found_urls: list[str] = []
+    target_tag = to_version.lstrip("v")
+    for rel in releases[:5]:
+        if not isinstance(rel, dict):
+            continue
+        tag = str(rel.get("tag_name") or rel.get("tag") or "").lstrip("v")
+        body = str(rel.get("body") or rel.get("notes") or "")[:1200]
+        url = rel.get("html_url") or rel.get("url") or ""
+        name = rel.get("name") or tag
+        if not tag and not body:
+            continue
+        marker = " (TARGET VERSION)" if target_tag and target_tag in tag else ""
+        lines.append(f"### {name or tag}{marker}\n{url}\n{body}")
         if url:
-            urls.append(url)
+            found_urls.append(url)
+    if len(lines) <= 1:
+        return "", []
+    return "\n".join(lines)[:3000], found_urls
 
-    if not chunks:
-        log_event(db, investigation_id, "RESEARCH", "exa returned no results", level="warn")
-        return None
 
-    evidence = "\n\n".join(chunks)[:8000]
-    log_event(db, investigation_id, "RESEARCH", f"collected {len(urls)} evidence sources via exa")
-    return {"source": "exa", "evidence_text": evidence, "urls": urls}
+def _agentic_answer(payload: dict[str, Any]) -> str:
+    """Pull the synthesized answer text out of the final agentic-search job."""
+    result = payload.get("result") or {}
+    for key in ("answer", "summary", "analysis", "content"):
+        if isinstance(payload.get(key), str) and payload[key].strip():
+            return payload[key].strip()[:4000]
+    if isinstance(result, dict):
+        for key in ("answer", "summary", "analysis", "content"):
+            if isinstance(result.get(key), str) and result[key].strip():
+                return result[key].strip()[:4000]
+        if isinstance(result.get("text"), str) and result["text"].strip():
+            return result["text"].strip()[:4000]
+    return ""
+
+
+def _trimmed_raw(
+    wire_raw: dict[str, Any] | None, agentic_raw: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Compact provenance record of the actual Anakin responses (for the event log)."""
+    keep: dict[str, Any] = {}
+    if wire_raw is not None:
+        keep["wire"] = {"status": wire_raw.get("status"), "keys": sorted(wire_raw.keys())[:12]}
+    if agentic_raw is not None:
+        keep["agentic"] = {"status": agentic_raw.get("status"), "keys": sorted(agentic_raw.keys())[:12]}
+    return keep
 
 
 def _fallback_scrape(
@@ -149,5 +227,5 @@ def _fallback_scrape(
         log_event(db, investigation_id, "RESEARCH", "no research evidence found; REASON will rely on measured data only", level="warn")
         return {"source": "none", "evidence_text": "", "urls": []}
 
-    evidence = "\n\n".join(chunks)[:8000]
+    evidence = "\n\n".join(chunks)[:MAX_EVIDENCE_CHARS]
     return {"source": "fallback", "evidence_text": evidence, "urls": urls}
