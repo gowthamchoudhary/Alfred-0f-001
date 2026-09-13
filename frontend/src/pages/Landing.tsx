@@ -45,10 +45,12 @@ function LogoSlot({ slot }: { slot: string }) {
 
 function LogoStrip() {
   return (
-    <div className="grid grid-cols-2 items-center justify-items-center gap-y-10 px-8 py-16 sm:grid-cols-3 lg:grid-cols-5 lg:py-20">
-      {LOGO_SLOTS.map((slot) => (
-        <LogoSlot key={slot} slot={slot} />
-      ))}
+    <div className="border-y border-[#EAE9E6] bg-[#F1F0EC]">
+      <div className="grid grid-cols-2 items-center justify-items-center gap-y-10 px-8 py-14 sm:grid-cols-3 lg:grid-cols-5 lg:py-16">
+        {LOGO_SLOTS.map((slot) => (
+          <LogoSlot key={slot} slot={slot} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -57,8 +59,11 @@ function LogoStrip() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="alfred-shell min-h-screen px-3 py-4 sm:px-6 sm:py-8">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:gap-6">{children}</div>
+    <div className="alfred-shell min-h-screen px-2.5 py-4 sm:px-4 sm:py-6 lg:px-6">
+      {/* ONE continuous inner page — a single large sheet floating on the outer background */}
+      <div className="mx-auto max-w-[1200px] overflow-hidden rounded-[2.5rem] border border-[#EAE9E6] bg-[#F9F8F6] shadow-[0_30px_80px_-48px_rgba(60,60,59,0.28)]">
+        {children}
+      </div>
     </div>
   );
 }
@@ -97,7 +102,8 @@ type AuthModeDispatch = (mode: AuthMode) => void;
 
 function Orb() {
   return (
-    <div className="relative mx-auto h-24 w-24 sm:h-28 sm:w-28">
+    <div className="relative mx-auto h-28 w-28 sm:h-32 sm:w-32">
+      <div className="orb-halo absolute -inset-8 rounded-full" />
       <div className="orb orb-core absolute inset-0 rounded-full" />
     </div>
   );
@@ -146,8 +152,8 @@ function FeatureGrid() {
   ];
   return (
     <section className="px-6 pb-20 sm:px-10">
-      <div className="relative border-t border-[#E1DFDC]">
-        <span className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#E1DFDC] bg-[#F9F9F6] px-4 py-1 text-xs text-[#3C3C3B]">
+      <div className="relative border-t border-[#EAE9E6]">
+        <span className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-4 py-1 text-xs text-[#3C3C3B]">
           Explore
         </span>
       </div>
@@ -168,22 +174,24 @@ function FeatureGrid() {
 
 function FinalCTA({ onAuth }: { onAuth: AuthModeDispatch }) {
   return (
-    <section className="mt-10 rounded-[2rem] border border-[#EAE9E6] bg-[#F9F8F6] px-6 py-24 text-center sm:py-32">
+    <section className="px-6 pb-24 pt-6 sm:px-10">
+      <div className="rounded-[2rem] border border-[#EAE9E6] bg-[#F1F0EC] px-6 py-20 text-center sm:py-28">
       <h2 className="mx-auto max-w-md text-4xl font-normal leading-[1.1] tracking-tight text-[#2F2F2E] sm:text-[2.75rem]">
         Start testing smarter
         <br />
         today.
       </h2>
-      <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-        <button
-          onClick={() => onAuth("signup")}
-          className="rounded-full bg-[#2F2F2E] px-7 py-3 text-sm text-[#F9F8F6] transition-all hover:bg-black"
-        >
-          Create account
-        </button>
-        <button className="rounded-full border border-[#E1DFDC] bg-white px-7 py-3 text-sm text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]">
-          Watch demo
-        </button>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={() => onAuth("signup")}
+            className="rounded-full bg-[#2F2F2E] px-7 py-3 text-sm text-[#F9F8F6] transition-all hover:bg-black"
+          >
+            Create account
+          </button>
+          <button className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-7 py-3 text-sm text-[#3C3C3B] transition-colors hover:bg-white">
+            Watch demo
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -194,8 +202,8 @@ function FinalCTA({ onAuth }: { onAuth: AuthModeDispatch }) {
 function Footer() {
   const links = ["GitHub", "Docs", "X", "LinkedIn"];
   return (
-    <footer className="rounded-[2rem] border border-[#EAE9E6] bg-[#F9F8F6] px-6 pb-6 sm:px-10">
-      <div className="border-t border-[#E1DFDC] pt-5">
+    <footer className="px-6 sm:px-10">
+      <div className="border-t border-[#EAE9E6] py-6">
         <div className="flex flex-col items-center justify-between gap-3 text-xs text-[#7A7873] sm:flex-row">
           <span>© 2026 Alfred. All rights reserved.</span>
           <div className="flex items-center gap-2">
@@ -219,27 +227,12 @@ function Footer() {
 export default function LandingPage({ onAuth }: { onAuth: AuthModeDispatch }) {
   return (
     <Shell>
-      {/* hero panel */}
-      <div className="overflow-hidden rounded-[2rem] border border-[#EAE9E6] bg-[#F9F8F6]">
-        <Navbar onAuth={onAuth} />
-        <Hero onAuth={onAuth} />
-      </div>
-
-      {/* logo strip panel */}
-      <div className="rounded-[2rem] border border-[#EAE9E6] bg-[#F1F0EC]">
-        <LogoStrip />
-      </div>
-
-      {/* product overview + feature columns */}
-      <div className="rounded-[2rem] border border-[#EAE9E6] bg-[#F9F8F6]">
-        <ProductOverview />
-        <FeatureGrid />
-      </div>
-
-      {/* final CTA panel */}
+      <Navbar onAuth={onAuth} />
+      <Hero onAuth={onAuth} />
+      <LogoStrip />
+      <ProductOverview />
+      <FeatureGrid />
       <FinalCTA onAuth={onAuth} />
-
-      {/* footer panel */}
       <Footer />
     </Shell>
   );
