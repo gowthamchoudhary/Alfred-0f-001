@@ -1,8 +1,10 @@
 """FastAPI application — REST surface for the Alfred dashboard.
 
-Endpoints (all JSON, polling-friendly, no auth by design — single project scope):
+Endpoints (all JSON, polling-friendly; all dashboard data is scoped to the
+authenticated user via the session cookie):
     GET  /api/health
-    GET  /api/investigations                list (newest first)
+    GET  /api/dashboard/summary             {counts, recent_investigations, activity, projects}
+    GET  /api/investigations                list (newest first, user-scoped)
     POST /api/investigations                manual trigger (background thread)
     GET  /api/investigations/{id}           full detail: events, runs, compare, decision, action
     GET  /api/detected-changes              every discovered release, incl. skipped
@@ -24,13 +26,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth import create_auth_router
+from .auth import create_auth_router, current_user
 from .db import Database
 from .discovery import poll_once, start_poller, stop_poller
 from .events import recent_events
@@ -90,6 +92,14 @@ class WatchlistRequest(BaseModel):
 
 
 # ------------------------------------------------------------------- helpers
+def require_user(request: Request) -> dict[str, Any]:
+    """Dashboard data is private: every data route requires a signed-in user."""
+    user = current_user(db, request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not signed in")
+    return user
+
+
 def _dispatch_investigation(
     repo_source: str,
     target_version: str,
@@ -98,6 +108,7 @@ def _dispatch_investigation(
     github_token: str | None = None,
     github_owner: str | None = None,
     github_repo: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Run the pipeline in a background thread; return the investigation id immediately.
 
@@ -117,6 +128,7 @@ def _dispatch_investigation(
                 github_owner=github_owner,
                 github_repo=github_repo,
                 trigger=trigger,
+                user_id=user_id,
             )
             inv_holder["id"] = inv_id
         except DockerUnavailableError as exc:
@@ -152,7 +164,7 @@ def health() -> dict[str, Any]:
         "running": list(_running.keys()),
         "groq_key": bool(os.environ.get("GROQ_API_KEY")),
         "github_token": "per-request (supplied by each investigation trigger)",
-        "exa_key": bool(os.environ.get("EXA_API_KEY")),
+        "anakin_key": bool(os.environ.get("ANAKIN_API_KEY")),
         "persist_to_supabase": bool(getattr(db, "is_postgres", False)),
         "docker_available": _quick_docker_probe(),
     }
@@ -167,13 +179,41 @@ def _quick_docker_probe() -> bool:
         return False
 
 
+@app.get("/api/dashboard/summary")
+def dashboard_summary(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """One round-trip for the dashboard Overview tab — every value is real:
+    counts from ``investigations``, cards from the latest persisted rows.
+    """
+    uid: str | None = user["id"]
+    counts = db.investigations_summary_counts(uid)
+    recent = db.list_investigations(limit=6, user_id=uid)
+    runs_by_inv: dict[str, dict[str, Any]] = {}
+    for inv in recent:
+        runs = db.list_test_runs(inv["id"])
+        if runs:
+            runs_by_inv[inv["id"]] = {r["environment"]: r for r in runs}
+    return {
+        "user": {"id": user["id"], "email": user["email"]},
+        "counts": counts,
+        "recent_investigations": recent,
+        "test_runs_by_investigation": runs_by_inv,
+        "activity": db.recent_activity(limit=8, user_id=uid),
+        "projects": db.monitored_projects(user_id=uid, limit=4),
+        "watchlist_count": len(db.list_watchlist()),
+    }
+
+
 @app.get("/api/investigations")
-def list_investigations(limit: int = 50) -> list[dict[str, Any]]:
-    return db.list_investigations(limit=limit)
+def list_investigations(
+    limit: int = 50, user: dict[str, Any] = Depends(require_user)
+) -> list[dict[str, Any]]:
+    return db.list_investigations(limit=limit, user_id=user["id"])
 
 
 @app.post("/api/investigations")
-def trigger_investigation(req: TriggerRequest) -> dict[str, Any]:
+def trigger_investigation(
+    req: TriggerRequest, user: dict[str, Any] = Depends(require_user)
+) -> dict[str, Any]:
     inv_id = _dispatch_investigation(
         req.repo_source,
         req.target_version,
@@ -182,14 +222,20 @@ def trigger_investigation(req: TriggerRequest) -> dict[str, Any]:
         github_token=req.github_token,
         github_owner=req.github_owner,
         github_repo=req.github_repo,
+        user_id=user["id"],
     )
     return {"investigation_id": inv_id}
 
 
 @app.get("/api/investigations/{inv_id}")
-def investigation_detail(inv_id: str) -> dict[str, Any]:
+def investigation_detail(
+    inv_id: str, user: dict[str, Any] = Depends(require_user)
+) -> dict[str, Any]:
     inv = db.get_investigation(inv_id)
     if not inv:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    if inv.get("user_id") and inv["user_id"] != user["id"]:
+        # Another user's investigation — indistinguishable from missing.
         raise HTTPException(status_code=404, detail="investigation not found")
     return {
         "investigation": inv,

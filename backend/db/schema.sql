@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS investigations (
     baseline_version TEXT NOT NULL,
     candidate_version TEXT NOT NULL,
     repo_source TEXT NOT NULL,
-    trigger TEXT NOT NULL DEFAULT 'manual',       -- discovery | manual
+    trigger TEXT NOT NULL DEFAULT 'manual',       -- discovery | manual | system
     status TEXT NOT NULL DEFAULT 'pending',       -- pending|running|complete|failed
     current_step TEXT,
     verdict TEXT,
@@ -22,8 +22,13 @@ CREATE TABLE IF NOT EXISTS investigations (
     github_issue_url TEXT,
     error TEXT,
     created_at DOUBLE PRECISION NOT NULL,
-    completed_at DOUBLE PRECISION
+    completed_at DOUBLE PRECISION,
+    user_id TEXT                                  -- owning Alfred account (NULL = system/CLI run)
 );
+
+-- Migration for tables created before per-user scoping existed.
+ALTER TABLE investigations ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_investigations_user ON investigations (user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS agent_events (
     id BIGSERIAL PRIMARY KEY,

@@ -35,7 +35,7 @@ except Exception as exc:  # noqa: BLE001
     GH_TOKEN = None
     print(f"[env] per-request github_token: gh accessor failed: {exc}", flush=True)
 
-for key in ("GROQ_API_KEY", "EXA_API_KEY"):
+for key in ("GROQ_API_KEY", "ANAKIN_API_KEY"):
     print(f"[env] {key}: {'present in process env' if os.environ.get(key) else 'ABSENT'}", flush=True)
 
 

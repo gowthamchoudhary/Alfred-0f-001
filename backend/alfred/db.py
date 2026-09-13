@@ -28,7 +28,7 @@ Tables (identical columns on both backends):
     watchlist        dependencies monitored by the discovery layer
 
 Credential safety by construction: there is deliberately NO column anywhere in
-this schema for GitHub tokens, GROQ_API_KEY, or EXA_API_KEY. GitHub tokens are
+this schema for GitHub tokens, GROQ_API_KEY, or ANAKIN_API_KEY. GitHub tokens are
 per-request and used in-memory only (see github_action.py); only results —
 issue URLs, verified flags, metrics, verdicts, triage decisions — are stored.
 """
@@ -67,8 +67,10 @@ CREATE TABLE IF NOT EXISTS investigations (
     github_issue_url TEXT,
     error TEXT,
     created_at REAL NOT NULL,
-    completed_at REAL
+    completed_at REAL,
+    user_id TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_investigations_user ON investigations (user_id, created_at);
 CREATE TABLE IF NOT EXISTS agent_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     investigation_id TEXT NOT NULL,
@@ -236,13 +238,18 @@ def _apply_pooler(url: str) -> str:
 def _apply_schema(conn: Any, sql: str) -> None:
     """Execute a multi-statement schema script one statement at a time.
 
+    Line comments are stripped BEFORE splitting on ``;`` — a semicolon inside
+    a ``--`` comment (e.g. prose like "email + password; no OAuth providers")
+    would otherwise split the script mid-comment, leak the comment tail into
+    the next statement, and crash Postgres with a syntax error at startup.
     Works on both drivers: sqlite3's ``execute`` refuses multi-statement
-    strings, and splitting lets comment lines ride along safely on both.
+    strings, and per-statement execution keeps both backends on one path.
     """
-    for stmt in sql.split(";"):
-        cleaned = "\n".join(
-            ln for ln in stmt.splitlines() if not ln.strip().startswith("--")
-        ).strip()
+    stripped = "\n".join(
+        ln for ln in sql.splitlines() if not ln.strip().startswith("--")
+    )
+    for stmt in stripped.split(";"):
+        cleaned = stmt.strip()
         if cleaned:
             conn.execute(text(cleaned))
 
@@ -300,6 +307,12 @@ class Database:
         schema_sql = _SCHEMA_SQL_PATH.read_text(encoding="utf-8") if self.is_postgres else _SQLITE_SCHEMA
         with _WRITE_LOCK:
             with self.engine.begin() as conn:
+                if not self.is_postgres:
+                    # sqlite has no ADD COLUMN IF NOT EXISTS — upgrade pre-existing
+                    # tables BEFORE the schema script so its index on user_id applies.
+                    cols = {row[1] for row in conn.execute(text("PRAGMA table_info(investigations)")).fetchall()}
+                    if cols and "user_id" not in cols:
+                        conn.execute(text("ALTER TABLE investigations ADD COLUMN user_id TEXT"))
                 _apply_schema(conn, schema_sql)
         global _FALLBACK_WARNED
         if not self.is_postgres and db_path is None and not _FALLBACK_WARNED:
@@ -368,6 +381,7 @@ class Database:
         candidate_version: str,
         repo_source: str,
         trigger: str = "manual",
+        user_id: str | None = None,
     ) -> str:
         inv_id = self._new_id()
         with _WRITE_LOCK:
@@ -376,8 +390,8 @@ class Database:
                     text(
                         "INSERT INTO investigations"
                         " (id, dependency_name, baseline_version, candidate_version, repo_source,"
-                        "  trigger, status, created_at)"
-                        " VALUES (:id, :dep, :base, :cand, :repo, :trigger, 'running', :created_at)"
+                        "  trigger, status, created_at, user_id)"
+                        " VALUES (:id, :dep, :base, :cand, :repo, :trigger, 'running', :created_at, :user_id)"
                     ),
                     {
                         "id": inv_id,
@@ -387,6 +401,7 @@ class Database:
                         "repo": repo_source,
                         "trigger": trigger,
                         "created_at": time.time(),
+                        "user_id": user_id,
                     },
                 )
         return inv_id
@@ -424,13 +439,103 @@ class Database:
             ).mappings().fetchone()
             return self._row_to_dict(row)
 
-    def list_investigations(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_investigations(self, limit: int = 50, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Newest-first list; scoped to ``user_id`` when provided."""
+        with self.engine.connect() as conn:
+            if user_id:
+                rows = conn.execute(
+                    text(
+                        "SELECT * FROM investigations WHERE user_id = :uid"
+                        " ORDER BY created_at DESC LIMIT :limit"
+                    ),
+                    {"uid": user_id, "limit": limit},
+                ).mappings().fetchall()
+            else:
+                rows = conn.execute(
+                    text(
+                        "SELECT * FROM investigations ORDER BY created_at DESC LIMIT :limit"
+                    ),
+                    {"limit": limit},
+                ).mappings().fetchall()
+            return self._rows_to_dicts(rows)
+
+    def investigations_summary_counts(self, user_id: str | None = None) -> dict[str, int]:
+        """Dashboard summary: totals plus verdict buckets — all real counts."""
+        scope = "WHERE user_id = :uid" if user_id else ""
+        params: dict[str, Any] = {"uid": user_id} if user_id else {}
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT"
+                    " COUNT(*) AS investigations,"
+                    " COUNT(*) FILTER (WHERE status = 'running') AS running,"
+                    " COUNT(*) FILTER (WHERE verdict IN ('HIGH_RISK','INCOMPATIBLE')) AS high_risk,"
+                    " COUNT(*) FILTER (WHERE verdict IN ('SAFE','SAFE_WITH_REVIEW')) AS safe,"
+                    " COUNT(*) FILTER (WHERE verdict IN ('MODERATE_RISK')) AS moderate"
+                    f" FROM investigations {scope}"
+                ).bindparams(**params) if self.is_postgres else text(
+                    "SELECT"
+                    " COUNT(*) AS investigations,"
+                    " SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,"
+                    " SUM(CASE WHEN verdict IN ('HIGH_RISK','INCOMPATIBLE') THEN 1 ELSE 0 END) AS high_risk,"
+                    " SUM(CASE WHEN verdict IN ('SAFE','SAFE_WITH_REVIEW') THEN 1 ELSE 0 END) AS safe,"
+                    " SUM(CASE WHEN verdict = 'MODERATE_RISK' THEN 1 ELSE 0 END) AS moderate"
+                    f" FROM investigations {scope}"
+                ),
+                params,
+            ).mappings().fetchone()
+        data = dict(row or {})
+        return {
+            "investigations": int(data.get("investigations") or 0),
+            "running": int(data.get("running") or 0),
+            "high_risk": int(data.get("high_risk") or 0),
+            "safe": int(data.get("safe") or 0),
+            "moderate": int(data.get("moderate") or 0),
+        }
+
+    def recent_activity(self, limit: int = 10, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Newest AgentEvent lines for the user's investigations (activity feed)."""
+        with self.engine.connect() as conn:
+            if user_id:
+                rows = conn.execute(
+                    text(
+                        "SELECT e.* FROM agent_events e"
+                        " JOIN investigations i ON i.id = e.investigation_id"
+                        " WHERE i.user_id = :uid"
+                        " ORDER BY e.id DESC LIMIT :limit"
+                    ),
+                    {"uid": user_id, "limit": limit},
+                ).mappings().fetchall()
+            else:
+                rows = conn.execute(
+                    text("SELECT * FROM agent_events ORDER BY id DESC LIMIT :limit"),
+                    {"limit": limit},
+                ).mappings().fetchall()
+            return self._rows_to_dicts(rows)
+
+    def monitored_projects(self, user_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        """Projects = distinct repo_sources from the user's real investigations.
+
+        Every field is derived from persisted pipeline data (investigation
+        counts, latest activity, verdicts) — nothing is fabricated.
+        """
+        scope = "WHERE user_id = :uid" if user_id else ""
+        params: dict[str, Any] = {"uid": user_id} if user_id else {"limit": limit}
+        if user_id:
+            params["limit"] = limit
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT * FROM investigations ORDER BY created_at DESC LIMIT :limit"
+                    "SELECT repo_source,"
+                    " COUNT(*) AS investigation_count,"
+                    " MAX(created_at) AS last_investigation_at,"
+                    " COUNT(*) FILTER (WHERE verdict IS NOT NULL) AS decided_count"
+                    " FROM investigations {scope}"
+                    " GROUP BY repo_source"
+                    " ORDER BY last_investigation_at DESC"
+                    " LIMIT :limit".format(scope=scope)
                 ),
-                {"limit": limit},
+                params,
             ).mappings().fetchall()
             return self._rows_to_dicts(rows)
 

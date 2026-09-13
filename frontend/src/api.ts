@@ -21,6 +21,7 @@ export interface Investigation {
   error: string | null;
   created_at: number;
   completed_at: number | null;
+  user_id?: string | null;
 }
 
 export interface AgentEvent {
@@ -122,6 +123,27 @@ export interface WatchlistEntry {
   last_seen_version: string | null;
 }
 
+export interface DashboardSummary {
+  user: { id: string; email: string };
+  counts: {
+    investigations: number;
+    running: number;
+    high_risk: number;
+    safe: number;
+    moderate: number;
+  };
+  recent_investigations: Investigation[];
+  test_runs_by_investigation: Record<string, Record<string, TestRun>>;
+  activity: AgentEvent[];
+  projects: {
+    repo_source: string;
+    investigation_count: number;
+    last_investigation_at: number;
+    decided_count: number;
+  }[];
+  watchlist_count: number;
+}
+
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -158,6 +180,7 @@ export const api = {
       .then((r) => (r.ok ? (r.json() as Promise<{ user: AuthUser }>) : null))
       .catch(() => null),
   health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
+  dashboardSummary: () => get<DashboardSummary>("/api/dashboard/summary"),
   investigations: () => get<Investigation[]>("/api/investigations"),
   investigationDetail: (id: string) => get<InvestigationDetail>(`/api/investigations/${id}`),
   trigger: (

@@ -55,23 +55,33 @@ body:has(.alfred-shell) {
 @keyframes orb-breathe {
   0%,
   100% {
-    filter: blur(14px) saturate(1);
-    opacity: 0.95;
+    filter: blur(6px) saturate(1);
+    opacity: 1;
   }
   50% {
-    filter: blur(18px) saturate(1.05);
-    opacity: 1;
+    filter: blur(9px) saturate(1.04);
+    opacity: 0.96;
   }
 }
 
 .orb {
   animation: orb-drift 26s ease-in-out infinite, orb-breathe 18s ease-in-out infinite;
   will-change: transform, filter;
+  box-shadow: 0 18px 40px -18px rgba(60, 60, 59, 0.25), inset 0 -6px 18px rgba(60, 60, 59, 0.1),
+    inset 0 6px 14px rgba(255, 255, 255, 0.65);
 }
 
 .orb-core {
   background:
-    radial-gradient(circle at 38% 32%, #fbfaf7 0%, #f1efe9 34%, #e4e1da 62%, #d8d5cd 82%, #cfccc4 100%);
+    radial-gradient(circle at 36% 30%, #fdfcfa 0%, #f3f1ea 28%, #e7e3da 52%, #d6d2c8 74%, #c2beb3 92%, #b5b1a6 100%);
+}
+
+/* Soft warm halo so the orb reads clearly against the light surface */
+.orb-halo {
+  background: radial-gradient(circle, rgba(197, 193, 183, 0.4) 0%, rgba(197, 193, 183, 0.16) 45%, transparent 70%);
+  animation: orb-drift 26s ease-in-out infinite reverse;
+  will-change: transform;
+  filter: blur(10px);
 }
 
 .orb::after {
