@@ -28,7 +28,7 @@ Tables (identical columns on both backends):
     watchlist        dependencies monitored by the discovery layer
 
 Credential safety by construction: there is deliberately NO column anywhere in
-this schema for GitHub tokens, GROQ_API_KEY, or EXA_API_KEY. GitHub tokens are
+this schema for GitHub tokens, GROQ_API_KEY, or ANAKIN_API_KEY. GitHub tokens are
 per-request and used in-memory only (see github_action.py); only results —
 issue URLs, verified flags, metrics, verdicts, triage decisions — are stored.
 """
