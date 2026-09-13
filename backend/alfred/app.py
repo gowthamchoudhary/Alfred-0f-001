@@ -164,7 +164,7 @@ def health() -> dict[str, Any]:
         "running": list(_running.keys()),
         "groq_key": bool(os.environ.get("GROQ_API_KEY")),
         "github_token": "per-request (supplied by each investigation trigger)",
-        "exa_key": bool(os.environ.get("EXA_API_KEY")),
+        "anakin_key": bool(os.environ.get("ANAKIN_API_KEY")),
         "persist_to_supabase": bool(getattr(db, "is_postgres", False)),
         "docker_available": _quick_docker_probe(),
     }
