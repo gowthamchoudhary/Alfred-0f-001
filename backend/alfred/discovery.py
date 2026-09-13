@@ -80,7 +80,8 @@ def fetch_github_releases_anakin(api_key: str, repo: str) -> list[dict]:
     Same row shape as the REST fallback so ``poll_once`` treats them
     identically; returns [] on any failure so the fallback can take over.
     """
-    raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"repo": repo})
+    owner, _, name = repo.partition("/")
+    raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"owner": owner, "repo": name})
     if not raw or (raw.get("status") or "").lower() in ("failed", "error", "cancelled", "canceled"):
         return []
     result = raw.get("result") or raw.get("data") or raw.get("output") or {}
