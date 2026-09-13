@@ -58,8 +58,9 @@ def research_dependency(
     # ---- (a) Wire: structured release data for GitHub-hosted deps ----------
     wire_raw: dict[str, Any] | None = None
     if github_repo:
+        owner, _, name = github_repo.partition("/")
         log_event(db, investigation_id, "RESEARCH", f"anakin wire gh_repo_releases: {github_repo}")
-        wire_raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"repo": github_repo})
+        wire_raw = wire_task(api_key, WIRE_GH_RELEASES_ACTION, {"owner": owner, "repo": name})
         if wire_raw and (wire_raw.get("status") or "completed") not in ("failed", "error"):
             chunk, wire_urls = _wire_chunk(wire_raw, dependency_name, to_version, github_repo)
             if chunk:
