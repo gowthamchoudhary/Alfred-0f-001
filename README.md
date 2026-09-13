@@ -23,10 +23,13 @@ backend/alfred/
 ├── test_runner.py     TEST     — pytest inside each container, summary parsing
 ├── workload.py        WORKLOAD — real concurrent HTTP (httpx + asyncio), p50/p95/p99
 ├── compare.py         COMPARE  — deterministic deltas + compatibility score (no LLM)
-├── research.py        RESEARCH — one targeted Exa search (fallback: PyPI/GitHub scrape)
+├── research.py        RESEARCH — Anakin agentic-search + Wire gh_repo_releases
+│                      (fallback: direct PyPI/GitHub scrape)
 ├── reason.py          REASON   — ONE Groq (openai/gpt-oss-120b) call, or rule-based fallback
 ├── github_action.py   ACTION/VERIFY — REST issue create + GET-back verification
-├── discovery.py       watchlist polling: PyPI RSS + GitHub releases
+├── anakin.py          Anakin REST client (search / agentic-search / Wire tasks)
+├── discovery.py       watchlist polling — PRIMARY: Anakin Wire gh_repo_releases;
+│                      fallback: PyPI RSS + GitHub REST releases
 ├── triage.py          deterministic filter (→ LLM only when ambiguous) → auto-invoke
 ├── contract.py        the repo contract validator (no demo app baked in)
 ├── db.py              persistence: Supabase (hosted Postgres, SQLAlchemy) with a
@@ -36,6 +39,30 @@ backend/alfred/
 └── cli.py             manual trigger fallback / debug tool
 frontend/              React + Tailwind dashboard (polling, no websockets)
 ```
+
+## Anakin (discovery + research provider)
+
+[Anakin](https://anakin.io) — `api.anakin.io/v1`, authenticated with `X-API-Key`
+(`ANAKIN_API_KEY`) — is Alfred's provider at BOTH stages, used properly against
+their live documented surface:
+
+* **DISCOVERY (Stage 1):** the poller runs Wire's ``gh_repo_releases`` action
+  (``POST /v1/wire/task`` + ``GET /v1/wire/jobs/{id}``, ``github_public``
+  catalog) for GitHub-hosted watchlist dependencies on the poll cadence —
+  Anakin handles auth/anti-bot and returns structured releases. Detected
+  releases are tagged ``source=anakin`` in ``detected_changes``. PyPI RSS and
+  GitHub REST polling remain as automatic fallbacks when the key is missing
+  or a job fails.
+* **RESEARCH (Stage 2):** every investigation calls Wire ``gh_repo_releases``
+  for structured release data on the dependency under test (when
+  GitHub-hosted) plus ONE ``POST /v1/agentic-search`` job (multi-stage
+  synthesis — chosen over plain ``/search`` for better evidence text),
+  polling to completion. If agentic-search does not settle in time, one
+  synchronous ``POST /v1/search`` call degrades gracefully inside Anakin.
+  Everything returned is folded into REASON's ``evidence_text`` — the
+  contract with the reasoning step is unchanged. Exa has been fully removed.
+* Missing key or failed calls are logged honestly and the pipeline continues
+  with reduced evidence — same reliability rules as every other integration.
 
 ## The repo contract
 
@@ -113,7 +140,7 @@ survives sandbox resets. The canonical schema is
 [`backend/db/schema.sql`](backend/db/schema.sql) — applied automatically and
 idempotently at startup. **There is deliberately no column anywhere in the
 schema for credentials**: GitHub tokens are per-request and used in-memory
-only, `GROQ_API_KEY`/`EXA_API_KEY` stay in the environment; only results
+only, `GROQ_API_KEY`/`ANAKIN_API_KEY` stay in the environment; only results
 (issue URLs, verified flags, metrics, verdicts) are ever written.
 
 Without `SUPABASE_DB_URL` Alfred falls back to a local SQLite file (same
@@ -143,7 +170,7 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 | Var | Effect |
 | --- | --- |
 | `GROQ_API_KEY` | enables LLM reasoning + LLM triage checks (Groq free tier, used intentionally for cost) |
-| `EXA_API_KEY` | enables targeted web research (Exa) |
+| `ANAKIN_API_KEY` | **discovery AND research provider** (Anakin, `api.anakin.io/v1`): Wire `gh_repo_releases` for GitHub-hosted dependency discovery and release evidence, `agentic-search` for migration/breaking-change research, synchronous `/search` as a graceful in-Anakin fallback. Without it, discovery falls back to PyPI RSS/GitHub REST and research to a direct PyPI/GitHub scrape — reduced evidence, never a crash. |
 | (no `GITHUB_TOKEN`) | GitHub credentials are **not** env vars — each caller supplies `github_token`/`github_owner`/`github_repo` with their investigation request (see Credentials above) |
 | `SUPABASE_DB_URL` | Supabase Postgres connection string (Project Settings → Database → Connection string, URI tab). When set, all investigation history persists to Supabase — outside this sandbox, so it survives workspace resets. Without it, Alfred falls back to a local SQLite file and warns. |
 | `SUPABASE_POOLER_HOST` | Optional. Supabase pooler host (e.g. `aws-0-ap-northeast-2.pooler.supabase.com`) from the dashboard's "Connection pooling" string. Needed in IPv4-only environments where the direct host (`db.<ref>.supabase.co`) is IPv6-only and unreachable; the username is rewritten to `postgres.<project-ref>` automatically. Defaults to this project's discovered pooler host, so no setup is normally required. |
