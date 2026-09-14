@@ -38,7 +38,13 @@ function LogoSlot({ slot }: { slot: string }) {
   }, [slot]);
 
   if (src) {
-    return <img src={src} alt={`${slot} logo`} className="h-8 w-auto max-w-[150px] object-contain opacity-90" />;
+    return (
+      <img
+        src={src}
+        alt={`${slot} logo`}
+        className="h-12 w-auto max-w-[200px] object-contain opacity-90 sm:h-16 sm:max-w-[240px]"
+      />
+    );
   }
   return (
     <span className="select-none rounded-full border border-dashed border-[#D8D6D0] px-5 py-2 text-[11px] tracking-wide text-[#A6A49E]">
