@@ -841,6 +841,13 @@ class Database:
                 ).mappings().fetchall()
             return self._rows_to_dicts(rows)
 
+    def clear_detected_changes(self) -> int:
+        """Delete every row of the Changes feed (detected_changes)."""
+        with _WRITE_LOCK:
+            with self.engine.begin() as conn:
+                result = conn.execute(text("DELETE FROM detected_changes"))
+                return result.rowcount or 0
+
     def get_pending_change(self, change_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = conn.execute(
@@ -936,6 +943,13 @@ class Database:
         with _WRITE_LOCK:
             with self.engine.begin() as conn:
                 conn.execute(text("DELETE FROM watchlist WHERE name = :name"), {"name": name})
+
+    def clear_watchlist(self) -> int:
+        """Delete every watchlist entry, including any stored credentials."""
+        with _WRITE_LOCK:
+            with self.engine.begin() as conn:
+                result = conn.execute(text("DELETE FROM watchlist"))
+                return result.rowcount or 0
 
     def list_watchlist(self) -> list[dict[str, Any]]:
         """Public watchlist view — credential columns are structurally excluded

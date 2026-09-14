@@ -21,6 +21,25 @@ from .db import Database
 RESERVED_ENV_NAMES = {"baseline", "candidate"}
 
 
+def _rmtree_force(path: str) -> None:
+    """shutil.rmtree that clears the read-only bit git sets on pack files.
+
+    Plain rmtree silently leaves .git fragments behind on Windows
+    (ignore_errors swallows the PermissionErrors), which is exactly how a
+    half-deleted clone once got copied as a 'baseline'.
+    """
+    import stat
+
+    def _onerror(func, failed_path, _exc_info):
+        try:
+            os.chmod(failed_path, stat.S_IWRITE)
+            func(failed_path)
+        except Exception:  # noqa: BLE001 — best-effort cleanup of a temp dir
+            pass
+
+    shutil.rmtree(path, ignore_errors=True, onerror=_onerror)
+
+
 def _is_git_url(source: str) -> bool:
     return bool(re.match(r"^(https?://|git@)", source)) or source.endswith(".git")
 
@@ -58,23 +77,34 @@ def stage_environments(
     baseline = os.path.join(workdir, "baseline")
     candidate = os.path.join(workdir, "candidate")
 
+    tmp_clone: str | None = None
     if _is_git_url(source):
         tmp_clone = tempfile.mkdtemp(prefix="alfred-clone-")
         try:
             log_event(db, investigation_id, "PREPARE", f"git clone --depth 1 {source}")
             _clone(source, tmp_clone)
-            src = tmp_clone
         except subprocess.CalledProcessError as exc:
+            _rmtree_force(tmp_clone)
             raise RuntimeError(
                 f"git clone failed: {exc.stderr.strip()[:500]}"
             ) from exc
-        finally:
-            shutil.rmtree(tmp_clone, ignore_errors=True)
+        except Exception:
+            _rmtree_force(tmp_clone)
+            raise
+        src = tmp_clone
     else:
         src = os.path.abspath(source)
 
-    shutil.copytree(src, baseline, dirs_exist_ok=True)
-    shutil.copytree(src, candidate, dirs_exist_ok=True)
+    # Copy while the source still exists — the clone temp dir must outlive
+    # these two calls (a finally-rmtree here used to delete it first, so the
+    # copies ran against a deleted dir and the bump step then failed with
+    # FileNotFoundError on baseline/requirements.txt).
+    try:
+        shutil.copytree(src, baseline, dirs_exist_ok=True)
+        shutil.copytree(src, candidate, dirs_exist_ok=True)
+    finally:
+        if tmp_clone:
+            _rmtree_force(tmp_clone)
 
     bump_applied = False
     baseline_req = _read_requirements(baseline)
