@@ -520,9 +520,11 @@ export default function DashboardPage({
           <aside className="hidden w-56 shrink-0 flex-col justify-between border-r border-[#EAE9E6] bg-[#F1F0EC] px-4 py-6 sm:flex">
             <div>
               <div className="flex items-center gap-2 px-2">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2F2F2E] text-sm font-medium text-[#F9F8F6]">
-                  A
-                </span>
+                <img
+                  src="/logos/alfred.png"
+                  alt="Alfred logo"
+                  className="h-7 w-7 rounded-full object-cover"
+                />
                 <span className="text-sm font-medium text-[#3C3C3B]">Alfred</span>
               </div>
               <nav className="mt-8 space-y-1">

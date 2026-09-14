@@ -42,7 +42,13 @@ export default function AuthPage({
           ← back
         </button>
 
-        <h1 className="mt-8 text-3xl font-normal tracking-tight text-[#2F2F2E]">
+        <img
+          src="/logos/alfred.png"
+          alt="Alfred logo"
+          className="mt-8 h-12 w-12 rounded-2xl object-cover shadow-[0_10px_30px_-12px_rgba(60,60,59,0.35)]"
+        />
+
+        <h1 className="mt-6 text-3xl font-normal tracking-tight text-[#2F2F2E]">
           {mode === "signup" ? "Create your account" : "Welcome back"}
         </h1>
         <p className="mt-2 text-sm text-[#7A7873]">

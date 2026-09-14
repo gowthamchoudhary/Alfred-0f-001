@@ -1,7 +1,8 @@
 # Logo assets
 
-Drop the real logo files here and they appear in the landing strip automatically:
+Partner logos in the landing strip (drop-in, no code changes):
 
-  openai.svg / vercel.svg / microsoft.svg / stripe.svg / docker.svg
+  anakin.png / groq.webp / github.png / docker.png / supabase.png
 
-(png, webp, jpg also work). No code changes needed.
+(png, svg, webp, jpg all work). The app mark itself is `alfred.png` — used in
+the navbar, auth page, dashboard sidebar, and favicon.
