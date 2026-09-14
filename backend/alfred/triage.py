@@ -192,6 +192,7 @@ def triage_and_dispatch(
     # (API/CLI) wins; otherwise decrypt the watchlist entry's stored token in
     # memory. The plaintext lives only for the duration of this investigation.
     used_stored_credential = False
+    owner_user_id: str | None = None
     if not github_token:
         stored = db.get_watchlist_credential(name)  # returns ciphertext
         if stored:
@@ -201,6 +202,7 @@ def triage_and_dispatch(
                 github_token = decrypt_secret(stored["gh_token_enc"])
                 github_owner = github_owner or stored.get("gh_owner")
                 github_repo = github_repo or stored.get("gh_repo")
+                owner_user_id = stored.get("user_id")
                 used_stored_credential = True
                 log_event(db, "system", "TRIAGE", f"{name} {version}: using encrypted watchlist credential (decrypted in memory for this run only)")
             except Exception as exc:  # noqa: BLE001 — bad/missing key must not kill the run
@@ -217,6 +219,7 @@ def triage_and_dispatch(
             github_owner=github_owner,
             github_repo=github_repo,
             trigger="discovery",
+            user_id=owner_user_id,
         )
         # Plaintext token goes out of scope here — discarded after the run.
         del github_token
