@@ -145,14 +145,22 @@ export interface DashboardSummary {
   watchlist_count: number;
 }
 
+// Backend API base URL. Empty default = relative paths (same-origin), which is
+// how Alfred is normally served: FastAPI serves frontend/dist itself, so the
+// dashboard and the API share one origin and the session cookie just works.
+// Deploying the frontend SEPARATELY? Set VITE_API_URL at build time to the
+// backend's origin (e.g. VITE_API_URL=https://api.example.com bun run build).
+// No trailing slash, no /api suffix — endpoints below already start with /api.
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+  const res = await fetch(`${API_BASE}${url}`, { credentials: "include" });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -177,7 +185,7 @@ export const api = {
     post<{ user: AuthUser }>("/api/auth/login", { email, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
   me: () =>
-    fetch("/api/auth/me")
+    fetch(`${API_BASE}/api/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? (r.json() as Promise<{ user: AuthUser }>) : null))
       .catch(() => null),
   health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
@@ -220,7 +228,10 @@ export const api = {
       github_repo: credential?.repo || null,
     }),
   removeWatch: (name: string) =>
-    fetch(`/api/watchlist/${name}`, { method: "DELETE" }).then((r) => r.json()),
+    fetch(`${API_BASE}/api/watchlist/${name}`, {
+      method: "DELETE",
+      credentials: "include",
+    }).then((r) => r.json()),
   pollDiscovery: () => post<{ new_changes: number }>("/api/discovery/poll", {}),
 };
 

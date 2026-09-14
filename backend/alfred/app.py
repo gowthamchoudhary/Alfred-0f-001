@@ -63,9 +63,21 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Alfred", version="0.1.0", lifespan=_lifespan)
+# CORS: explicit origins only. A wildcard cannot be combined with
+# allow_credentials=True — browsers reject credentialed cross-origin requests
+# unless the server echoes an exact origin, so Alfred maintains a strict list.
+# Add split-deployment frontend origins here (Vercel domain goes here once
+# deployed).
+CORS_ALLOWED_ORIGINS = [
+    "https://level-pamphlet-outspoken.ngrok-free.dev",
+    # Vercel production aliases for the split frontend deployment
+    "https://alfred-0f-001.vercel.app",
+    "https://alfred-0f-001-jayavarapugowtham-2013s.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
