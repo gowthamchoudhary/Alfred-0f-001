@@ -3,9 +3,12 @@
 -- IF NOT EXISTS everywhere, safe to re-run). A mirror of this schema for the
 -- local SQLite fallback lives inline in db.py.
 --
--- Credential safety by construction: there is deliberately NO column anywhere
--- in this schema for GitHub tokens, GROQ_API_KEY, or EXA_API_KEY. Only results
--- (issue URLs, verified flags, metrics, verdicts, triage decisions) are stored.
+-- Credential model: GitHub tokens for auto-triggered investigations are
+-- stored ONCE per watchlist entry as Fernet ciphertext (gh_token_enc, key from
+-- ALFRED_ENCRYPTION_KEY) and are never returned by any API — read the comment
+-- on watchlist. No plaintext token, GROQ_API_KEY, or ANAKIN_API_KEY is stored
+-- anywhere; only results (issue URLs, verified flags, metrics, verdicts,
+-- triage decisions) are stored.
 
 CREATE TABLE IF NOT EXISTS investigations (
     id TEXT PRIMARY KEY,
@@ -124,8 +127,24 @@ CREATE TABLE IF NOT EXISTS watchlist (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     last_checked_at DOUBLE PRECISION,
     last_seen_version TEXT,
-    added_at DOUBLE PRECISION NOT NULL
+    added_at DOUBLE PRECISION NOT NULL,
+    -- One-time registration credential for unattended auto-investigations:
+    -- the user's GitHub PAT for THIS dependency, encrypted at rest with
+    -- Fernet (key: ALFRED_ENCRYPTION_KEY). Ciphertext only — the plaintext
+    -- token never enters the database, any other table, or an API response.
+    -- get_watchlist_credential() is the single reader; list_watchlist()
+    -- projects these columns away so responses can never carry them.
+    gh_token_enc TEXT,
+    gh_owner TEXT,
+    gh_repo TEXT,
+    user_id TEXT                                  -- registering Alfred account, auto investigations inherit it
 );
+
+-- Migration for watchlist tables created before encrypted credentials existed.
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_token_enc TEXT;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_owner TEXT;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_repo TEXT;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- Alfred accounts (email + password; no OAuth providers by design).
 -- password_hash is a salted PBKDF2 hash — never a plaintext password, and

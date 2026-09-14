@@ -144,11 +144,15 @@ def triage_and_dispatch(
 
     Returns the investigation id when the pipeline ran, else None.
 
-    Credential model: discovery-triggered investigations carry no GitHub
-token (there is no user in the loop) — the pipeline runs fully and the
-ACTION step skips itself cleanly. Only user-initiated requests (API/CLI)
-supply per-request GitHub credentials, forwarded in-memory via the optional
-``github_token``/``github_owner``/``github_repo`` parameters.
+    Credential model: this is the UNATTENDED path — no human is present to
+    supply a token. When the caller did not pass one, the credential stored
+    (Fernet-encrypted at rest) on this dependency's watchlist entry is
+    decrypted in memory, used for ACTION/VERIFY inside the pipeline, and
+    DISCARDED when run_investigation returns — same in-memory-only principle
+    as before, now sourced from encrypted storage. An explicit per-request
+    ``github_token`` (API/CLI override) always wins. No stored credential →
+    the pipeline still runs; ACTION skips itself cleanly. A missing key or
+    failed decrypt is logged honestly and never crashes the pipeline.
     """
     name = change["dependency_name"]
     version = change["latest_version"]
@@ -184,6 +188,27 @@ supply per-request GitHub credentials, forwarded in-memory via the optional
     # Accepted → run the real pipeline.
     from .orchestrator import run_investigation
 
+    # Credential resolution for the unattended run: explicit per-request token
+    # (API/CLI) wins; otherwise decrypt the watchlist entry's stored token in
+    # memory. The plaintext lives only for the duration of this investigation.
+    used_stored_credential = False
+    owner_user_id: str | None = None
+    if not github_token:
+        stored = db.get_watchlist_credential(name)  # returns ciphertext
+        if stored:
+            try:
+                from .crypto import decrypt_secret
+
+                github_token = decrypt_secret(stored["gh_token_enc"])
+                github_owner = github_owner or stored.get("gh_owner")
+                github_repo = github_repo or stored.get("gh_repo")
+                owner_user_id = stored.get("user_id")
+                used_stored_credential = True
+                log_event(db, "system", "TRIAGE", f"{name} {version}: using encrypted watchlist credential (decrypted in memory for this run only)")
+            except Exception as exc:  # noqa: BLE001 — bad/missing key must not kill the run
+                log_event(db, "system", "TRIAGE", f"{name} {version}: stored credential unusable ({exc}); ACTION will skip", level="warn")
+                github_token = None
+
     try:
         inv_id = run_investigation(
             db,
@@ -194,8 +219,13 @@ supply per-request GitHub credentials, forwarded in-memory via the optional
             github_owner=github_owner,
             github_repo=github_repo,
             trigger="discovery",
+            user_id=owner_user_id,
         )
+        # Plaintext token goes out of scope here — discarded after the run.
+        del github_token
         db.mark_change_triaged(change_id, "accepted", "investigation dispatched", "deterministic", investigation_id=inv_id)
+        if used_stored_credential:
+            log_event(db, inv_id, "ACTION", "issue credentials came from the encrypted watchlist entry (in-memory only)")
         return inv_id
     except Exception as exc:  # noqa: BLE001 — record the failure, keep the loop alive
         db.mark_change_triaged(change_id, "accepted", f"investigation failed to start: {exc}", "deterministic")

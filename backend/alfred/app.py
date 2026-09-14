@@ -9,9 +9,9 @@ authenticated user via the session cookie):
     GET  /api/investigations/{id}           full detail: events, runs, compare, decision, action
     GET  /api/detected-changes              every discovered release, incl. skipped
     POST /api/discovery/poll                force one discovery poll now
-    GET  /api/watchlist                     monitored dependencies
-    POST /api/watchlist                     add {name, source, repo}
-    DELETE /api/watchlist/{name}            stop watching
+    GET  /api/watchlist                     monitored dependencies (auth; credentials never included)
+    POST /api/watchlist                     add {name, source, repo, github_token?} — token encrypted once, never returned
+    DELETE /api/watchlist/{name}            stop watching (auth)
     GET  /api/events                        live tail of recent event lines
 
 Serves the built frontend from ../frontend/dist when present.
@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth import create_auth_router, current_user
+from .crypto import EncryptionKeyMissing, encrypt_secret
 from .db import Database
 from .discovery import poll_once, start_poller, stop_poller
 from .events import recent_events
@@ -89,6 +90,14 @@ class WatchlistRequest(BaseModel):
     name: str
     source: str = "pypi"
     repo: str | None = None
+    # ONE-TIME registration credential for unattended auto-investigations.
+    # Encrypted at rest immediately and never returned by any endpoint.
+    github_token: str | None = Field(
+        None,
+        description="User's GitHub PAT, stored Fernet-encrypted on this entry so the poller can run unattended. Never returned by any API response.",
+    )
+    github_owner: str | None = Field(None, description="Owner of the repo the verdict issue is posted to")
+    github_repo: str | None = Field(None, description="Repo the verdict issue is posted to")
 
 
 # ------------------------------------------------------------------- helpers
@@ -163,8 +172,9 @@ def health() -> dict[str, Any]:
         "time": time.time(),
         "running": list(_running.keys()),
         "groq_key": bool(os.environ.get("GROQ_API_KEY")),
-        "github_token": "per-request (supplied by each investigation trigger)",
+        "github_token": "per-request, or encrypted-at-rest on the watchlist entry (ALFRED_ENCRYPTION_KEY)",
         "anakin_key": bool(os.environ.get("ANAKIN_API_KEY")),
+        "encryption_key": bool(os.environ.get("ALFRED_ENCRYPTION_KEY")),
         "persist_to_supabase": bool(getattr(db, "is_postgres", False)),
         "docker_available": _quick_docker_probe(),
     }
@@ -259,22 +269,45 @@ def discovery_poll() -> dict[str, Any]:
 
 
 @app.get("/api/watchlist")
-def get_watchlist() -> list[dict[str, Any]]:
+def get_watchlist(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
+    # db.list_watchlist() projects credential columns away — the encrypted
+    # token structurally cannot appear here even if future code changes the
+    # row shape. Auth required: entries now carry credentials at rest.
     return db.list_watchlist()
 
 
 @app.post("/api/watchlist")
-def add_watch(req: WatchlistRequest) -> dict[str, Any]:
+def add_watch(req: WatchlistRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     if req.source not in ("pypi", "github"):
         raise HTTPException(status_code=400, detail="source must be 'pypi' or 'github'")
     if req.source == "github" and not req.repo:
         raise HTTPException(status_code=400, detail="github watchlist entries need a repo (owner/name)")
-    db.add_watchlist_entry(req.name, req.source, req.repo)
-    return {"ok": True, "name": req.name}
+    gh_token_enc: str | None = None
+    if req.github_token:
+        try:
+            # Encrypt BEFORE the token touches any persistence layer. Only the
+            # ciphertext is stored; the plaintext dies with this request.
+            gh_token_enc = encrypt_secret(req.github_token)
+        except EncryptionKeyMissing as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"cannot store credential: {exc}",
+            ) from exc
+    db.add_watchlist_entry(
+        req.name,
+        req.source,
+        req.repo,
+        gh_token_enc=gh_token_enc,
+        gh_owner=req.github_owner,
+        gh_repo=req.github_repo,
+        user_id=user["id"],
+    )
+    registered = bool(req.github_token)
+    return {"ok": True, "name": req.name, "credential_registered": registered}
 
 
 @app.delete("/api/watchlist/{name}")
-def remove_watch(name: str) -> dict[str, Any]:
+def remove_watch(name: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     db.remove_watchlist_entry(name)
     return {"ok": True}
 

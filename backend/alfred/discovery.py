@@ -143,9 +143,6 @@ def _parse_rss_date(raw: str) -> str | None:
 
 def poll_once(db: Database) -> int:
     """Poll every enabled watchlist entry once; returns number of NEW changes."""
-    from .docker_runner import _docker_available
-
-    docker_ok = _docker_available()
     repo_target = ALFRED_REPO_TARGET
     new_changes = 0
     for entry in db.list_watchlist():
@@ -185,13 +182,17 @@ def poll_once(db: Database) -> int:
                 try:
                     from .triage import triage_and_dispatch
 
-                    if repo_target and docker_ok:
+                    if repo_target:
+                        # Dispatch unconditionally on repo availability: when
+                        # docker is down run_investigation raises immediately
+                        # and triage records the honest failure — rows never
+                        # silently wait forever.
                         triage_and_dispatch(db, stored, repo_source=repo_target)
                     else:
                         db.mark_change_triaged(
                             stored["id"],
                             "pending",
-                            "awaiting ALFRED_REPO_TARGET/docker before auto-investigation",
+                            "awaiting ALFRED_REPO_TARGET before auto-investigation",
                             "deterministic",
                         )
                 except Exception as exc:  # noqa: BLE001 — triage must not kill polling
@@ -199,6 +200,36 @@ def poll_once(db: Database) -> int:
         latest = releases[0]["latest_version"] if releases else None
         db.update_watchlist_status(name, latest)
     return new_changes
+
+
+def _dispatch_pending(db: Database) -> int:
+    """Triage pending detected_changes (this is how a change inserted between
+    ticks — or one that had to wait for repo availability — still gets
+    auto-investigated with zero human action). Returns how many dispatched."""
+    repo_target = ALFRED_REPO_TARGET
+    if not repo_target:
+        return 0
+    dispatched = 0
+    for change in db.list_detected_changes(status="pending", limit=20):
+        # One thread per change: entries are investigated INDEPENDENTLY — a
+        # long pipeline on one dependency must not delay another's.
+        threading.Thread(
+            target=_safe_dispatch,
+            args=(db, change, repo_target),
+            name=f"alfred-auto-{change.get('dependency_name')}",
+            daemon=True,
+        ).start()
+        dispatched += 1
+    return dispatched
+
+
+def _safe_dispatch(db: Database, change: dict, repo_target: str) -> None:
+    from .triage import triage_and_dispatch
+
+    try:
+        triage_and_dispatch(db, change, repo_source=repo_target)
+    except Exception as exc:  # noqa: BLE001 — one bad row must not stall the rest
+        print(f"[discovery] pending dispatch error for {change.get('dependency_name')}: {exc}", flush=True)
 
 
 def start_poller(app: "Database") -> None:
@@ -209,11 +240,23 @@ def start_poller(app: "Database") -> None:
 
     def _loop() -> None:
         interval = int(__import__("os").environ.get("ALFRED_POLL_INTERVAL", POLL_INTERVAL))
+        print(
+            f"[discovery] background poller started (thread {threading.current_thread().name}) — "
+            f"first check now, then every {interval}s",
+            flush=True,
+        )
         while not _stop.is_set():
             try:
                 count = poll_once(app)
-                if count:
-                    print(f"[discovery] {count} new release(s) detected", flush=True)
+                dispatched = _dispatch_pending(app)
+                if count or dispatched:
+                    print(
+                        f"[discovery] tick: {count} new release(s) detected, "
+                        f"{dispatched} pending change(s) auto-investigated",
+                        flush=True,
+                    )
+                else:
+                    print("[discovery] tick: no new releases", flush=True)
             except Exception as exc:  # noqa: BLE001 — the loop must survive anything
                 print(f"[discovery] poll error: {exc}", flush=True)
             _stop.wait(interval)

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   api,
   type AgentEvent,
   type DashboardSummary,
   type Investigation,
   type TestRun,
+  type WatchlistEntry,
 } from "../api";
 
 /* ------------------------------------------------------------------ helpers */
@@ -452,7 +453,7 @@ function ActivityItem({ e }: { e: AgentEvent }) {
 
 /* -------------------------------------------------------------------- shell */
 
-const NAV_ITEMS = ["Overview", "Projects", "Investigations", "Changes", "Settings"] as const;
+const NAV_ITEMS = ["Overview", "Projects", "Investigations", "Changes", "Watchlist", "Settings"] as const;
 type NavItem = (typeof NAV_ITEMS)[number];
 
 export default function DashboardPage({
@@ -775,9 +776,9 @@ export default function DashboardPage({
                 </div>
               )}
 
-              {nav === "Changes" && (
-                <ChangesPanel loading={loading} />
-              )}
+              {nav === "Changes" && <ChangesPanel loading={loading} />}
+
+              {nav === "Watchlist" && <WatchlistPanel />}
 
               {nav === "Settings" && (
                 <div className="space-y-4">
@@ -876,6 +877,199 @@ interface DetectedChangeLite {
   triage_status: string;
   triage_reason: string | null;
   detected_at: number;
+}
+
+/* ----------------------------------------------------------- watchlist panel */
+
+function WatchlistPanel() {
+  const [entries, setEntries] = useState<WatchlistEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    api
+      .watchlist()
+      .then((w) => {
+        setEntries(w);
+        setError(null);
+      })
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h2 className="text-base font-medium text-[#3C3C3B]">Monitored dependencies</h2>
+        <p className="mt-0.5 text-xs text-[#7A7873]">
+          What the background poller checks every {"ALFRED_POLL_INTERVAL"} seconds. A new release
+          here is detected, triaged, and — if accepted — investigated automatically with zero human
+          action.
+        </p>
+        <div className="mt-4 space-y-2">
+          {loading ? (
+            <SkeletonCard />
+          ) : error ? (
+            <p className="text-sm text-[#A94B43]">Unable to load watchlist — {error}</p>
+          ) : entries.length === 0 ? (
+            <EmptyBlock
+              title="Nothing on the watchlist yet."
+              body="Add a dependency below — Alfred polls its release feed on a schedule and investigates accepted updates on its own."
+            />
+          ) : (
+            entries.map((w) => (
+              <div
+                key={w.name}
+                className="flex items-center justify-between rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] px-5 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-[#3C3C3B]">
+                    <span className="font-medium">{w.name}</span>{" "}
+                    <span className="rounded-full border border-[#E1DFDC] bg-[#F1EFEC] px-2 py-0.5 text-[10px] text-[#7A7873]">
+                      {w.source}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-[#A6A49E]">
+                    {w.last_seen_version
+                      ? `last seen ${w.last_seen_version}${
+                          w.last_checked_at !== null && w.last_checked_at !== undefined
+                            ? ` · checked ${relTime(w.last_checked_at)}`
+                            : ""
+                        }`
+                      : "never polled yet"}
+                    {w.repo ? ` · ${w.repo}` : ""}
+                  </p>
+                </div>
+                <button
+                  onClick={() =>
+                    api
+                      .removeWatch(w.name)
+                      .then(refresh)
+                      .catch(() => undefined)
+                  }
+                  className="shrink-0 rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-3 py-1 text-[11px] text-[#7A7873] transition-colors hover:bg-[#F1EFEC]"
+                >
+                  remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <AddWatchForm onAdded={refresh} />
+    </div>
+  );
+}
+
+function AddWatchForm({ onAdded }: { onAdded: () => void }) {
+  const [name, setName] = useState("");
+  const [source, setSource] = useState("pypi");
+  const [ghRepo, setGhRepo] = useState("");
+  const [owner, setOwner] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [registered, setRegistered] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setRegistered(false);
+    try {
+      const credential = owner.trim() && token.trim() ? { token: token.trim(), owner: owner.trim(), repo: ghRepo.trim() } : undefined;
+      const res = await api.addWatch(
+        name.trim(),
+        source,
+        ghRepo.trim() || undefined,
+        credential,
+      );
+      setRegistered(res.credential_registered === true);
+      setName("");
+      setGhRepo("");
+      setOwner("");
+      setToken("");
+      onAdded();
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-5">
+      <p className="text-xs text-[#7A7873]">Watch a dependency</p>
+      <p className="mt-1 text-sm text-[#7A7873]">
+        Alfred polls its releases on a schedule. Paste a GitHub token below <em>once</em> — it is
+        stored encrypted (Fernet, at rest) on this entry so automatic investigations can post their
+        verdict issue unattended. It is never returned by any endpoint, never logged, and can be
+        rotated by re-registering. Leave it blank and verdict issues simply skip.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_1.4fr]">
+        <input
+          className="rounded-full border border-[#E1DFDC] bg-white px-4 py-2 text-sm text-[#3C3C3B] placeholder-[#A6A49E] outline-none focus:border-[#B8B6B0]"
+          placeholder="dependency (e.g. openai)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          autoComplete="off"
+        />
+        <select
+          className="rounded-full border border-[#E1DFDC] bg-white px-4 py-2 text-sm text-[#3C3C3B] outline-none focus:border-[#B8B6B0]"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+        >
+          <option value="pypi">PyPI</option>
+          <option value="github">GitHub</option>
+        </select>
+        <input
+          className="rounded-full border border-[#E1DFDC] bg-white px-4 py-2 text-sm text-[#3C3C3B] placeholder-[#A6A49E] outline-none focus:border-[#B8B6B0]"
+          placeholder="github owner/repo (optional, e.g. openai/openai-python)"
+          value={ghRepo}
+          onChange={(e) => setGhRepo(e.target.value)}
+          autoComplete="off"
+        />
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1.6fr_auto]">
+        <input
+          className="rounded-full border border-[#E1DFDC] bg-white px-4 py-2 text-sm text-[#3C3C3B] placeholder-[#A6A49E] outline-none focus:border-[#B8B6B0]"
+          placeholder="issue destination owner (optional)"
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+          autoComplete="off"
+        />
+        <input
+          className="rounded-full border border-[#E1DFDC] bg-white px-4 py-2 text-sm text-[#3C3C3B] placeholder-[#A6A49E] outline-none focus:border-[#B8B6B0]"
+          type="password"
+          placeholder="GitHub token (one-time, encrypted at rest)"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          autoComplete="new-password"
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-full bg-[#2F2F2E] px-5 py-2 text-sm text-[#F9F8F6] transition-all hover:bg-black disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Watch"}
+        </button>
+      </div>
+      {error && <p className="mt-2 px-1 text-xs text-[#A94B43]">{error}</p>}
+      {registered && !error && (
+        <p className="mt-2 px-1 text-xs text-[#4A6B45]">
+          Credential registered — encrypted at rest, never returned. Automatic investigations for
+          this entry can now post their verdict issue on their own.
+        </p>
+      )}
+    </form>
+  );
 }
 
 function GithubCardInline({

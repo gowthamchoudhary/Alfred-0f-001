@@ -13,6 +13,166 @@ back to GitHub as an issue (verified to actually exist).
 **Every number shown anywhere comes from a container that actually ran.**
 The LLM interprets facts; it never invents them.
 
+- **Jump to: [How to use Alfred — the complete walkthrough](#how-to-use-alfred--the-complete-walkthrough)** ·
+  [How to get a GitHub token](#step-3--get-a-github-token-once) ·
+  [What happens during each pipeline step, in plain language](#what-actually-happens-in-each-step-in-plain-language)
+
+## How to use Alfred — the complete walkthrough
+
+This section explains, in plain language, everything a user needs: what to
+prepare, where to click, what the GitHub token is for, and what happens
+underneath.
+
+### Step 1 — Create your account
+
+Sign up with an email and a password (≥8 chars). That is the only identity
+Alfred needs — **GitHub is an integration, not a login.** After signup you land
+on the dashboard.
+
+### Step 2 — Prepare your repo (the one-time contract)
+
+Alfred runs **any** repository that follows one minimal convention — there is
+no demo app baked in. Four things, already true of most Python services:
+
+```
+your-repo/
+├── Dockerfile          # builds your app; must expose it on $PORT
+├── requirements.txt    # pinned versions — THIS is the file Alfred bumps
+├── tests/              # a pytest suite that runs INSIDE the container
+└── alfred.yaml         # what to watch, which endpoint to hit, how hard
+```
+
+`alfred.yaml` (the workload plan):
+
+```yaml
+dependency:
+  name: openai          # the dependency Alfred watches and bumps
+  current: "1.99.0"     # the version your requirements.txt currently pins
+workload:
+  endpoint: /chat       # the real endpoint the load test fires at
+  method: POST
+  concurrency: 20       # simultaneous requests
+  requests: 500         # total requests per environment
+  payloads:
+    - { "message": "Summarize this refund policy." }
+```
+
+Why each piece matters: the Dockerfile is how Alfred gets two honest copies of
+your app running; the pinned `requirements.txt` is the only thing that differs
+between the two environments; the pytest suite is your own definition of
+"still works"; the workload is your own definition of "still fast enough".
+`examples/sample-repo/` is a working reference of the whole contract.
+
+### Step 3 — Get a GitHub token (once)
+
+Alfred posts each verdict **as a real GitHub issue on your repo**, so it needs
+a token that may create issues as you. Recommended: a **fine-grained personal
+access token** scoped to exactly one repo:
+
+1. Go to **github.com → Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens → Generate new token** (direct link:
+   `https://github.com/settings/personal-access-tokens/new`).
+2. **Token name:** anything, e.g. `alfred-verdicts`.
+3. **Resource owner:** your user/org. **Repository access:** *Only select
+   repositories* → pick the repo that should receive verdict issues.
+4. **Permissions:** *Contents* → `Read-only` (enough for release discovery);
+   if your repo requires it for issue creation, set *Issues* → `Read and
+   write`. Leave **everything else unchecked**.
+5. Click **Generate token**, copy the `github_pat_…` value — GitHub shows it
+   **once**.
+6. Paste it into the dashboard **Watchlist** form (Step 4) when you register a
+   dependency. That is the only time you will ever handle it.
+
+**What happens to it (the security model):**
+
+* Stored **Fernet-encrypted at rest** (`ALFRED_ENCRYPTION_KEY`) on your
+  watchlist entry — the database never contains the plaintext.
+* When an automatic investigation fires, the ciphertext is decrypted **in
+  memory**, used for the issue POST and the verify GET, and discarded when the
+  run ends.
+* It is **never returned by any API response** (the watchlist reader
+  structurally excludes credential columns), never logged, and never written
+  to any table in plaintext. A leak test in the suite asserts this against the
+  raw database bytes.
+* Rotate any time by re-registering the entry with a new token; delete the
+  entry and the ciphertext is gone.
+* Manual one-off runs can alternatively pass a fresh token per request — an
+  explicit per-request token always wins over the stored one.
+
+### Step 4 — Watch a dependency (turns on the automatic loop)
+
+Dashboard → **Watchlist** → fill the form:
+
+* **dependency** — e.g. `openai` (the PyPI or GitHub name)
+* **source** — PyPI or GitHub
+* **github owner/repo** — optional; sharpens release discovery for GitHub-hosted deps
+* **issue destination owner** + **GitHub token** — the one-time credential from Step 3
+
+Click **Watch**. From this moment the loop is fully autonomous: the background
+poller (started automatically when the server starts) checks this dependency
+every `ALFRED_POLL_INTERVAL` seconds (default 900), detects new releases,
+triages them, and — for anything it accepts — runs the full pipeline with zero
+human action. The verdict lands on your repo as an issue and on your dashboard
+with a live event timeline.
+
+### Step 5 — Run an investigation yourself (optional)
+
+You never *have* to wait for a real release. Dashboard → **Overview** →
+"Run an investigation": give it a repo path or git URL and a target version —
+Alfred stages baseline vs candidate immediately. Same engine, same evidence.
+
+### Step 6 — Read the results
+
+Every investigation page shows, all sourced from real persisted data:
+
+* a **timestamped event timeline** — every one of the ten pipeline steps
+* **baseline vs candidate** test counts, p50/p95/p99 latency, error rate,
+  throughput — each with absolute + percentage deltas
+* the deterministic **compatibility score** (60% functional, 40% performance)
+* the **verdict** (SAFE / SAFE_WITH_REVIEW / MODERATE_RISK / HIGH_RISK) with
+  the AI's reasons and confidence
+* the **verified GitHub issue URL** — VERIFY literally GETs the issue back
+  before claiming it exists
+
+Skipped releases are visible on the **Changes** tab with the reason — nothing
+is hidden, and skipped changes never burn Docker cycles.
+
+### What actually happens in each step (plain language)
+
+```
+WATCH      A background thread polls release feeds (Anakin Wire releases for
+           GitHub-hosted deps; PyPI RSS / GitHub REST as fallbacks) on a
+           schedule. A new version becomes a row in detected_changes.
+TRIAGE     Cheap rules first: is it actually newer? Is it a major bump? Do the
+           notes say breaking/deprecated/removed/migration? Pre-releases are
+           skipped. Only genuinely ambiguous cases spend one LLM relevance
+           check. Accepted changes are marked and dispatched.
+PREPARE    Your repo is cloned/copied twice. Candidate's requirements.txt gets
+           the watched dependency bumped to the new version. Baseline stays
+           exactly as-is.
+BUILD      Both copies are built from their own Dockerfile. (Build failure is a
+           valid result — reported, not a crash.)
+RUN        Both images run as containers with --memory 512m --cpus 1, on
+           separate host ports. Alfred waits for the app to accept connections
+           (startup failure is also a valid, reportable result).
+TEST       Your own pytest suite runs inside each container. The summary line
+           is parsed for passed/failed/errors — no plugins, minimal contract.
+WORKLOAD   Real concurrent HTTP requests — your payloads at your concurrency —
+           fire at both containers. Latency percentiles and error rates come
+           from actual timings, not simulations.
+COMPARE    Pure deterministic math (no AI): deltas per metric plus the
+           compatibility score.
+RESEARCH   Anakin agentic-search + GitHub release data fetch migration-guide /
+           breaking-change context for this exact dependency + version pair.
+REASON     ONE LLM call reads the measured evidence + research and writes a
+           verdict with confidence and reasons. Without an LLM key, a
+           rule-based verdict from the score takes over — never a crash.
+ACTION     The verdict is posted to your repo as a GitHub issue via the REST
+           API (using the token from Step 3 — or skipped cleanly if absent).
+VERIFY     The issue is fetched back from GitHub to confirm it really exists.
+CLEANUP    Both containers are always stopped and removed, even on failure.
+```
+
 ## Architecture
 
 ```
@@ -182,11 +342,26 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 * `GROQ_API_KEY` — environment-level (one shared key, set by the operator);
   used for every investigation's REASON (and triage) LLM calls. Never exposed
   to or requested from end users.
-* **GitHub token — per-user, per-request.** Supplied by the caller on each
-  investigation (`github_token` + `github_owner` + `github_repo` in the API
-  request, CLI flags, or dashboard form). Used in-memory for that run's
-  ACTION/VERIFY steps only: never written to the database, never logged, never
-  returned in any API response. No token → the ACTION step skips cleanly.
+* `ALFRED_ENCRYPTION_KEY` — a Fernet key (`python -c "from alfred.crypto import
+  generate_key; print(generate_key())"`). Required for encrypted watchlist
+  credentials; without it, registering a token returns 503 and auto-runs fall
+  back to a clean ACTION skip. Never stored in the database.
+* **GitHub token — two supply paths, one rule: never exposed.**
+  * *Automatic (poller → triage) runs:* the user supplies their token **once**
+    at watchlist registration (`POST /api/watchlist` with
+    `github_token`/`github_owner`/`github_repo`). It is stored **Fernet-encrypted
+    at rest** on that watchlist entry (`watchlist.gh_token_enc`); the plaintext
+    never enters the database. When a change auto-investigates, the ciphertext
+    is decrypted in memory, used for ACTION/VERIFY, and discarded when the run
+    ends.
+  * *Manual/API/CLI runs:* per-request override, in-memory only (unchanged) —
+    an explicit `github_token` on the trigger always wins over the stored one.
+  * The plaintext token is NEVER logged and NEVER returned by any API response:
+    `GET /api/watchlist` and the dashboard read through
+    `db.list_watchlist()`, which structurally excludes the credential columns.
+  * No stored credential → the pipeline still runs; ACTION skips cleanly.
+* Rotation: delete and re-register the watchlist entry with the new token
+  (re-registering with a token updates the stored ciphertext in place).
 
 ## REST API
 
@@ -199,8 +374,10 @@ POST   /api/investigations            manual trigger {repo_source, target_versio
 GET    /api/investigations/{id}       full detail: events, runs, comparison, decision, action
 GET    /api/detected-changes          every discovered release, incl. skipped
 POST   /api/discovery/poll            force one discovery poll now
-GET    /api/watchlist                 monitored dependencies
-POST   /api/watchlist                 add {name, source: pypi|github, repo?}
+GET    /api/watchlist                 monitored dependencies (auth; credentials never included)
+POST   /api/watchlist                 add {name, source: pypi|github, repo?,
+                                      github_token?, github_owner?, github_repo?}
+                                      — token stored encrypted once, never returned
 DELETE /api/watchlist/{name}          stop watching
 GET    /api/events                    live tail of recent event lines
 ```
@@ -211,7 +388,7 @@ GET    /api/events                    live tail of recent event lines
 * Python/Docker/pytest/HTTP-API projects only
 * Dependency version bumps only — not arbitrary code/framework migrations
 * No browser automation for GitHub — REST API is correct and sufficient
-* No user accounts, no long-term trend analytics beyond the investigation list
+* No long-term trend analytics beyond the investigation list
 
 ## Tests
 

@@ -121,6 +121,7 @@ export interface WatchlistEntry {
   enabled: boolean;
   last_checked_at: number | null;
   last_seen_version: string | null;
+  user_id?: string | null;
 }
 
 export interface DashboardSummary {
@@ -201,8 +202,23 @@ export const api = {
     }),
   detectedChanges: () => get<DetectedChange[]>("/api/detected-changes"),
   watchlist: () => get<WatchlistEntry[]>("/api/watchlist"),
-  addWatch: (name: string, source: string, repo?: string) =>
-    post<{ ok: boolean }>("/api/watchlist", { name, source, repo: repo || null }),
+  addWatch: (
+    name: string,
+    source: string,
+    repo?: string,
+    credential?: { token: string; owner: string; repo: string },
+  ) =>
+    post<{ ok: boolean; credential_registered?: boolean }>("/api/watchlist", {
+      name,
+      source,
+      repo: repo || null,
+      // One-time registration: the token is stored Fernet-encrypted on this
+      // watchlist entry so the background poller can run unattended. It is
+      // never returned by any endpoint afterwards.
+      github_token: credential?.token || null,
+      github_owner: credential?.owner || null,
+      github_repo: credential?.repo || null,
+    }),
   removeWatch: (name: string) =>
     fetch(`/api/watchlist/${name}`, { method: "DELETE" }).then((r) => r.json()),
   pollDiscovery: () => post<{ new_changes: number }>("/api/discovery/poll", {}),

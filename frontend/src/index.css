@@ -100,6 +100,72 @@ body:has(.alfred-shell) {
   }
 }
 
+/* ---------------- Landing scroll-reveal + pipeline flow animations -------- */
+html {
+  scroll-behavior: smooth;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.7s ease,
+    transform 0.7s ease;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Vertical pipeline connector with a pulse traveling down it */
+.flow-line {
+  position: relative;
+  background: #e1dfdc;
+}
+
+.flow-line::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #2f2f2e;
+  box-shadow: 0 0 0 4px rgba(47, 47, 46, 0.08);
+  animation: flow-travel 3.4s ease-in-out infinite;
+}
+
+@keyframes flow-travel {
+  0% {
+    top: 0;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    top: calc(100% - 7px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .flow-line::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* Subtle entrance for hero/sections */
 @keyframes alfred-fade-up {
   from {
