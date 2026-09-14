@@ -815,17 +815,32 @@ export default function DashboardPage({
 function ChangesPanel({ loading }: { loading: boolean }) {
   const [changes, setChanges] = useState<DetectedChangeLite[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
+  const refresh = useCallback(() => {
     api
       .detectedChanges()
-      .then((c) => alive && setChanges(c))
-      .catch((e) => alive && setError(String(e instanceof Error ? e.message : e)));
-    return () => {
-      alive = false;
-    };
+      .then((c) => setChanges(c))
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)));
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const clearAll = async () => {
+    if (!window.confirm("Clear every detected change from this feed? Past investigations are kept."))
+      return;
+    setClearing(true);
+    try {
+      await api.clearChanges();
+      refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setClearing(false);
+    }
+  };
 
   if (loading) return <SkeletonCard />;
   if (error) return <p className="text-sm text-[#A94B43]">Unable to load changes — {error}</p>;
@@ -839,6 +854,15 @@ function ChangesPanel({ loading }: { loading: boolean }) {
 
   return (
     <div className="space-y-2">
+      <div className="flex justify-end">
+        <button
+          onClick={clearAll}
+          disabled={clearing}
+          className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-3 py-1 text-[11px] text-[#7A7873] transition-colors hover:bg-[#F1EFEC] hover:text-[#A94B43] disabled:opacity-50"
+        >
+          {clearing ? "clearing…" : "clear all"}
+        </button>
+      </div>
       {changes.map((c) => (
         <div
           key={c.id}
@@ -887,6 +911,7 @@ function WatchlistPanel() {
   const [entries, setEntries] = useState<WatchlistEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -900,6 +925,24 @@ function WatchlistPanel() {
       .finally(() => setLoading(false));
   }, []);
 
+  const clearAll = async () => {
+    if (
+      !window.confirm(
+        "Remove every watched dependency? Stored GitHub credentials on these entries are deleted too.",
+      )
+    )
+      return;
+    setClearing(true);
+    try {
+      await api.clearWatchlist();
+      refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   useEffect(() => {
     refresh();
   }, [refresh]);
@@ -907,7 +950,18 @@ function WatchlistPanel() {
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-base font-medium text-[#3C3C3B]">Monitored dependencies</h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-base font-medium text-[#3C3C3B]">Monitored dependencies</h2>
+          {entries.length > 0 && (
+            <button
+              onClick={clearAll}
+              disabled={clearing}
+              className="shrink-0 rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-3 py-1 text-[11px] text-[#7A7873] transition-colors hover:bg-[#F1EFEC] hover:text-[#A94B43] disabled:opacity-50"
+            >
+              {clearing ? "clearing…" : "clear all"}
+            </button>
+          )}
+        </div>
         <p className="mt-0.5 text-xs text-[#7A7873]">
           What the background poller checks every {"ALFRED_POLL_INTERVAL"} seconds. A new release
           here is detected, triaged, and — if accepted — investigated automatically with zero human

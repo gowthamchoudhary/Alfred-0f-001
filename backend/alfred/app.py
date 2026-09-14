@@ -39,23 +39,17 @@ from .discovery import poll_once, start_poller, stop_poller
 from .events import recent_events
 from .orchestrator import DockerUnavailableError, run_investigation
 
-DEFAULT_WATCHLIST = ("openai", "anthropic", "groq")
-
 db = Database()
 _running: dict[str, str] = {}  # investigation_id -> repo_source (live registry)
 _running_lock = threading.Lock()
 
 
-def _seed_watchlist() -> None:
-    existing = {w["name"] for w in db.list_watchlist()}
-    for name in DEFAULT_WATCHLIST:
-        if name not in existing:
-            db.add_watchlist_entry(name, source="pypi")
-
-
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    _seed_watchlist()
+    # The watchlist starts EMPTY: users watch exactly what they choose. It used
+    # to auto-seed openai/anthropic/groq here, which resurrected deleted
+    # entries on every restart and polluted the Changes feed with releases
+    # nobody asked for.
     if os.environ.get("ALFRED_DISABLE_POLLER", "").lower() not in ("1", "true", "yes"):
         start_poller(db)
     yield
@@ -78,6 +72,10 @@ CORS_ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
+    # Free ngrok mints a NEW random subdomain on every restart; hardcoding it
+    # breaks the split deployment each time. Any https ngrok-free.dev tunnel
+    # is still an explicit, non-wildcard origin echoed per-request.
+    allow_origin_regex=r"https://[a-z0-9-]+\.ngrok-free\.dev",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -322,6 +320,20 @@ def add_watch(req: WatchlistRequest, user: dict[str, Any] = Depends(require_user
 def remove_watch(name: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     db.remove_watchlist_entry(name)
     return {"ok": True}
+
+
+@app.delete("/api/watchlist")
+def clear_watchlist(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Remove every watchlist entry (stored credentials go with them)."""
+    removed = db.clear_watchlist()
+    return {"ok": True, "removed": removed}
+
+
+@app.delete("/api/detected-changes")
+def clear_detected_changes(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Wipe the Changes feed. Past investigations are untouched."""
+    removed = db.clear_detected_changes()
+    return {"ok": True, "removed": removed}
 
 
 @app.get("/api/events")

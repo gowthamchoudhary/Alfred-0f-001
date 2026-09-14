@@ -153,8 +153,15 @@ export interface DashboardSummary {
 // No trailing slash, no /api suffix — endpoints below already start with /api.
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
+// ngrok's free tier serves a browser-warning interstitial (an HTML page with no
+// CORS headers) unless requests carry this header. Other hosts ignore it.
+const EXTRA_HEADERS: Record<string, string> = { "ngrok-skip-browser-warning": "true" };
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, { credentials: "include" });
+  const res = await fetch(`${API_BASE}${url}`, {
+    credentials: "include",
+    headers: EXTRA_HEADERS,
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -162,8 +169,22 @@ async function get<T>(url: string): Promise<T> {
 async function post<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...EXTRA_HEADERS },
     body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+async function del<T>(url: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: EXTRA_HEADERS,
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
@@ -185,7 +206,7 @@ export const api = {
     post<{ user: AuthUser }>("/api/auth/login", { email, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
   me: () =>
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include" })
+    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", headers: EXTRA_HEADERS })
       .then((r) => (r.ok ? (r.json() as Promise<{ user: AuthUser }>) : null))
       .catch(() => null),
   health: () => get<{ status: string; docker_available: boolean }>("/api/health"),
@@ -228,10 +249,15 @@ export const api = {
       github_repo: credential?.repo || null,
     }),
   removeWatch: (name: string) =>
-    fetch(`${API_BASE}/api/watchlist/${name}`, {
+    fetch(`${API_BASE}/api/watchlist/${encodeURIComponent(name)}`, {
       method: "DELETE",
       credentials: "include",
+      headers: EXTRA_HEADERS,
     }).then((r) => r.json()),
+  clearWatchlist: () =>
+    del<{ ok: boolean; removed: number }>("/api/watchlist"),
+  clearChanges: () =>
+    del<{ ok: boolean; removed: number }>("/api/detected-changes"),
   pollDiscovery: () => post<{ new_changes: number }>("/api/discovery/poll", {}),
 };
 
