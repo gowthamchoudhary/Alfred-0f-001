@@ -182,11 +182,26 @@ Environment variables (all optional — the pipeline degrades, never crashes):
 * `GROQ_API_KEY` — environment-level (one shared key, set by the operator);
   used for every investigation's REASON (and triage) LLM calls. Never exposed
   to or requested from end users.
-* **GitHub token — per-user, per-request.** Supplied by the caller on each
-  investigation (`github_token` + `github_owner` + `github_repo` in the API
-  request, CLI flags, or dashboard form). Used in-memory for that run's
-  ACTION/VERIFY steps only: never written to the database, never logged, never
-  returned in any API response. No token → the ACTION step skips cleanly.
+* `ALFRED_ENCRYPTION_KEY` — a Fernet key (`python -c "from alfred.crypto import
+  generate_key; print(generate_key())"`). Required for encrypted watchlist
+  credentials; without it, registering a token returns 503 and auto-runs fall
+  back to a clean ACTION skip. Never stored in the database.
+* **GitHub token — two supply paths, one rule: never exposed.**
+  * *Automatic (poller → triage) runs:* the user supplies their token **once**
+    at watchlist registration (`POST /api/watchlist` with
+    `github_token`/`github_owner`/`github_repo`). It is stored **Fernet-encrypted
+    at rest** on that watchlist entry (`watchlist.gh_token_enc`); the plaintext
+    never enters the database. When a change auto-investigates, the ciphertext
+    is decrypted in memory, used for ACTION/VERIFY, and discarded when the run
+    ends.
+  * *Manual/API/CLI runs:* per-request override, in-memory only (unchanged) —
+    an explicit `github_token` on the trigger always wins over the stored one.
+  * The plaintext token is NEVER logged and NEVER returned by any API response:
+    `GET /api/watchlist` and the dashboard read through
+    `db.list_watchlist()`, which structurally excludes the credential columns.
+  * No stored credential → the pipeline still runs; ACTION skips cleanly.
+* Rotation: delete and re-register the watchlist entry with the new token
+  (re-registering with a token updates the stored ciphertext in place).
 
 ## REST API
 
@@ -199,8 +214,10 @@ POST   /api/investigations            manual trigger {repo_source, target_versio
 GET    /api/investigations/{id}       full detail: events, runs, comparison, decision, action
 GET    /api/detected-changes          every discovered release, incl. skipped
 POST   /api/discovery/poll            force one discovery poll now
-GET    /api/watchlist                 monitored dependencies
-POST   /api/watchlist                 add {name, source: pypi|github, repo?}
+GET    /api/watchlist                 monitored dependencies (auth; credentials never included)
+POST   /api/watchlist                 add {name, source: pypi|github, repo?,
+                                      github_token?, github_owner?, github_repo?}
+                                      — token stored encrypted once, never returned
 DELETE /api/watchlist/{name}          stop watching
 GET    /api/events                    live tail of recent event lines
 ```
@@ -211,7 +228,7 @@ GET    /api/events                    live tail of recent event lines
 * Python/Docker/pytest/HTTP-API projects only
 * Dependency version bumps only — not arbitrary code/framework migrations
 * No browser automation for GitHub — REST API is correct and sufficient
-* No user accounts, no long-term trend analytics beyond the investigation list
+* No long-term trend analytics beyond the investigation list
 
 ## Tests
 
