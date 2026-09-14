@@ -165,7 +165,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
     added_at REAL NOT NULL,
     gh_token_enc TEXT,
     gh_owner TEXT,
-    gh_repo TEXT
+    gh_repo TEXT,
+    user_id TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -244,17 +245,40 @@ def _apply_pooler(url: str) -> str:
 def _apply_schema(conn: Any, sql: str) -> None:
     """Execute a multi-statement schema script one statement at a time.
 
-    Line comments are stripped BEFORE splitting on ``;`` — a semicolon inside
-    a ``--`` comment (e.g. prose like "email + password; no OAuth providers")
-    would otherwise split the script mid-comment, leak the comment tail into
-    the next statement, and crash Postgres with a syntax error at startup.
+    Comments are stripped BEFORE splitting on ``;``. Both comment styles are
+    handled: full-line ``--`` comments, and TRAILING ``--`` comments after
+    code — a semicolon in either (e.g. prose like "email + password; no
+    OAuth providers" or "account; auto investigations inherit it") would
+    otherwise split the script mid-comment, leak the comment tail into the
+    next statement, and crash Postgres with a syntax error at startup. The
+    inline stripper is quote-aware so ``;`` inside string literals survives.
     Works on both drivers: sqlite3's ``execute`` refuses multi-statement
     strings, and per-statement execution keeps both backends on one path.
     """
-    stripped = "\n".join(
+    no_full_line = "\n".join(
         ln for ln in sql.splitlines() if not ln.strip().startswith("--")
     )
-    for stmt in stripped.split(";"):
+    stripped_lines: list[str] = []
+    for ln in no_full_line.splitlines():
+        out: list[str] = []
+        in_quote: str | None = None
+        i = 0
+        while i < len(ln):
+            ch = ln[i]
+            if in_quote:
+                if ch == in_quote:
+                    in_quote = None
+                out.append(ch)
+            elif ch in ("'", '"'):
+                in_quote = ch
+                out.append(ch)
+            elif ch == "-" and ln[i : i + 2] == "--":
+                break  # trailing comment — drop the rest of the line
+            else:
+                out.append(ch)
+            i += 1
+        stripped_lines.append("".join(out))
+    for stmt in "\n".join(stripped_lines).split(";"):
         cleaned = stmt.strip()
         if cleaned:
             conn.execute(text(cleaned))
@@ -320,7 +344,7 @@ class Database:
                     if cols and "user_id" not in cols:
                         conn.execute(text("ALTER TABLE investigations ADD COLUMN user_id TEXT"))
                     wcols = {row[1] for row in conn.execute(text("PRAGMA table_info(watchlist)")).fetchall()}
-                    for col in ("gh_token_enc", "gh_owner", "gh_repo"):
+                    for col in ("gh_token_enc", "gh_owner", "gh_repo", "user_id"):
                         if wcols and col not in wcols:
                             conn.execute(text(f"ALTER TABLE watchlist ADD COLUMN {col} TEXT"))
                 _apply_schema(conn, schema_sql)
@@ -855,7 +879,7 @@ class Database:
     # /api/watchlist, the dashboard, and health) never selects them — only
     # get_watchlist_credential() reads them, on the auto-investigation path.
     _WATCHLIST_PUBLIC_COLS = (
-        "name, source, repo, enabled, last_checked_at, last_seen_version, added_at"
+        "name, source, repo, enabled, last_checked_at, last_seen_version, added_at, user_id"
     )
 
     def add_watchlist_entry(
@@ -866,30 +890,35 @@ class Database:
         gh_token_enc: str | None = None,
         gh_owner: str | None = None,
         gh_repo: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         """Register a dependency. ``gh_token_enc`` is ALREADY-ENCRYPTED ciphertext
-        (encrypt before calling — the db layer never handles plaintext tokens)."""
+        (encrypt before calling — the db layer never handles plaintext tokens).
+        ``user_id`` ties the entry to an account so auto investigations show up
+        in that user's dashboard."""
         with _WRITE_LOCK:
             with self.engine.begin() as conn:
                 conn.execute(
                     text(
                         "INSERT INTO watchlist (name, source, repo, enabled, added_at,"
-                        "  gh_token_enc, gh_owner, gh_repo)"
-                        " VALUES (:name, :source, :repo, TRUE, :added_at, :tok, :owner, :ghrepo)"
+                        "  gh_token_enc, gh_owner, gh_repo, user_id)"
+                        " VALUES (:name, :source, :repo, TRUE, :added_at, :tok, :owner, :ghrepo, :user_id)"
                         " ON CONFLICT (name) DO UPDATE SET"
                         "  gh_token_enc = COALESCE(EXCLUDED.gh_token_enc, watchlist.gh_token_enc),"
                         "  gh_owner = COALESCE(EXCLUDED.gh_owner, watchlist.gh_owner),"
-                        "  gh_repo = COALESCE(EXCLUDED.gh_repo, watchlist.gh_repo)"
+                        "  gh_repo = COALESCE(EXCLUDED.gh_repo, watchlist.gh_repo),"
+                        "  user_id = COALESCE(watchlist.user_id, EXCLUDED.user_id)"
                     )
                     if self.is_postgres
                     else text(
                         "INSERT INTO watchlist (name, source, repo, enabled, added_at,"
-                        "  gh_token_enc, gh_owner, gh_repo)"
-                        " VALUES (:name, :source, :repo, 1, :added_at, :tok, :owner, :ghrepo)"
+                        "  gh_token_enc, gh_owner, gh_repo, user_id)"
+                        " VALUES (:name, :source, :repo, 1, :added_at, :tok, :owner, :ghrepo, :user_id)"
                         " ON CONFLICT(name) DO UPDATE SET"
                         "  gh_token_enc = COALESCE(excluded.gh_token_enc, watchlist.gh_token_enc),"
                         "  gh_owner = COALESCE(excluded.gh_owner, watchlist.gh_owner),"
-                        "  gh_repo = COALESCE(excluded.gh_repo, watchlist.gh_repo)"
+                        "  gh_repo = COALESCE(excluded.gh_repo, watchlist.gh_repo),"
+                        "  user_id = COALESCE(watchlist.user_id, excluded.user_id)"
                     ),
                     {
                         "name": name,
@@ -899,6 +928,7 @@ class Database:
                         "tok": gh_token_enc,
                         "owner": gh_owner,
                         "ghrepo": gh_repo,
+                        "user_id": user_id,
                     },
                 )
 
@@ -921,20 +951,27 @@ class Database:
     def get_watchlist_credential(self, name: str) -> dict[str, Any] | None:
         """INTERNAL reader for the auto-investigation path ONLY.
 
-        Returns {gh_token_enc, gh_owner, gh_repo} (ciphertext!) or None. The
-        caller decrypts in memory, uses, and discards — the plaintext token
-        must never be stored, logged, or returned by any route.
+        Returns {gh_token_enc, gh_owner, gh_repo, user_id} (ciphertext!) or
+        None. The caller decrypts in memory, uses, and discards — the
+        plaintext token must never be stored, logged, or returned by any
+        route. ``user_id`` attributes the resulting auto investigation to the
+        account that registered this entry.
         """
         with self.engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT gh_token_enc, gh_owner, gh_repo FROM watchlist WHERE name = :name"
+                    "SELECT gh_token_enc, gh_owner, gh_repo, user_id FROM watchlist WHERE name = :name"
                 ),
                 {"name": name},
             ).mappings().fetchone()
             if row is None or not row["gh_token_enc"]:
                 return None
-            return {"gh_token_enc": row["gh_token_enc"], "gh_owner": row["gh_owner"], "gh_repo": row["gh_repo"]}
+            return {
+                "gh_token_enc": row["gh_token_enc"],
+                "gh_owner": row["gh_owner"],
+                "gh_repo": row["gh_repo"],
+                "user_id": row["user_id"],
+            }
 
     def update_watchlist_status(
         self, name: str, last_seen_version: str | None = None
