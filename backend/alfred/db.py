@@ -27,10 +27,13 @@ Tables (identical columns on both backends):
     detected_changes every discovered release (investigated or skipped)
     watchlist        dependencies monitored by the discovery layer
 
-Credential safety by construction: there is deliberately NO column anywhere in
-this schema for GitHub tokens, GROQ_API_KEY, or ANAKIN_API_KEY. GitHub tokens are
-per-request and used in-memory only (see github_action.py); only results —
-issue URLs, verified flags, metrics, verdicts, triage decisions — are stored.
+Credential model: GitHub tokens for MANUAL/API runs are per-request,
+in-memory only. For AUTOMATIC (poller→triage) runs, the user supplies a token
+once at watchlist registration; it is stored Fernet-encrypted at rest on that
+watchlist entry (gh_token_enc, key: ALFRED_ENCRYPTION_KEY — see crypto.py) and
+decrypted in memory only for the duration of that run. The plaintext token is
+NEVER stored in any other table, never logged, and never returned by any API
+response (list_watchlist structurally excludes credential columns).
 """
 
 from __future__ import annotations
@@ -159,7 +162,10 @@ CREATE TABLE IF NOT EXISTS watchlist (
     enabled INTEGER NOT NULL DEFAULT 1,
     last_checked_at REAL,
     last_seen_version TEXT,
-    added_at REAL NOT NULL
+    added_at REAL NOT NULL,
+    gh_token_enc TEXT,
+    gh_owner TEXT,
+    gh_repo TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -313,6 +319,10 @@ class Database:
                     cols = {row[1] for row in conn.execute(text("PRAGMA table_info(investigations)")).fetchall()}
                     if cols and "user_id" not in cols:
                         conn.execute(text("ALTER TABLE investigations ADD COLUMN user_id TEXT"))
+                    wcols = {row[1] for row in conn.execute(text("PRAGMA table_info(watchlist)")).fetchall()}
+                    for col in ("gh_token_enc", "gh_owner", "gh_repo"):
+                        if wcols and col not in wcols:
+                            conn.execute(text(f"ALTER TABLE watchlist ADD COLUMN {col} TEXT"))
                 _apply_schema(conn, schema_sql)
         global _FALLBACK_WARNED
         if not self.is_postgres and db_path is None and not _FALLBACK_WARNED:
@@ -840,21 +850,56 @@ class Database:
                 )
 
     # -------------------------------------------------------------- watchlist
-    def add_watchlist_entry(self, name: str, source: str = "pypi", repo: str | None = None) -> None:
+    # Credential columns live on this table but are PROJECTED OUT of every
+    # read that feeds an API response. list_watchlist() (used by GET
+    # /api/watchlist, the dashboard, and health) never selects them — only
+    # get_watchlist_credential() reads them, on the auto-investigation path.
+    _WATCHLIST_PUBLIC_COLS = (
+        "name, source, repo, enabled, last_checked_at, last_seen_version, added_at"
+    )
+
+    def add_watchlist_entry(
+        self,
+        name: str,
+        source: str = "pypi",
+        repo: str | None = None,
+        gh_token_enc: str | None = None,
+        gh_owner: str | None = None,
+        gh_repo: str | None = None,
+    ) -> None:
+        """Register a dependency. ``gh_token_enc`` is ALREADY-ENCRYPTED ciphertext
+        (encrypt before calling — the db layer never handles plaintext tokens)."""
         with _WRITE_LOCK:
             with self.engine.begin() as conn:
                 conn.execute(
                     text(
-                        "INSERT INTO watchlist (name, source, repo, enabled, added_at)"
-                        " VALUES (:name, :source, :repo, TRUE, :added_at)"
-                        " ON CONFLICT (name) DO NOTHING"
+                        "INSERT INTO watchlist (name, source, repo, enabled, added_at,"
+                        "  gh_token_enc, gh_owner, gh_repo)"
+                        " VALUES (:name, :source, :repo, TRUE, :added_at, :tok, :owner, :ghrepo)"
+                        " ON CONFLICT (name) DO UPDATE SET"
+                        "  gh_token_enc = COALESCE(EXCLUDED.gh_token_enc, watchlist.gh_token_enc),"
+                        "  gh_owner = COALESCE(EXCLUDED.gh_owner, watchlist.gh_owner),"
+                        "  gh_repo = COALESCE(EXCLUDED.gh_repo, watchlist.gh_repo)"
                     )
                     if self.is_postgres
                     else text(
-                        "INSERT OR IGNORE INTO watchlist (name, source, repo, enabled, added_at)"
-                        " VALUES (:name, :source, :repo, 1, :added_at)"
+                        "INSERT INTO watchlist (name, source, repo, enabled, added_at,"
+                        "  gh_token_enc, gh_owner, gh_repo)"
+                        " VALUES (:name, :source, :repo, 1, :added_at, :tok, :owner, :ghrepo)"
+                        " ON CONFLICT(name) DO UPDATE SET"
+                        "  gh_token_enc = COALESCE(excluded.gh_token_enc, watchlist.gh_token_enc),"
+                        "  gh_owner = COALESCE(excluded.gh_owner, watchlist.gh_owner),"
+                        "  gh_repo = COALESCE(excluded.gh_repo, watchlist.gh_repo)"
                     ),
-                    {"name": name, "source": source, "repo": repo, "added_at": time.time()},
+                    {
+                        "name": name,
+                        "source": source,
+                        "repo": repo,
+                        "added_at": time.time(),
+                        "tok": gh_token_enc,
+                        "owner": gh_owner,
+                        "ghrepo": gh_repo,
+                    },
                 )
 
     def remove_watchlist_entry(self, name: str) -> None:
@@ -863,11 +908,33 @@ class Database:
                 conn.execute(text("DELETE FROM watchlist WHERE name = :name"), {"name": name})
 
     def list_watchlist(self) -> list[dict[str, Any]]:
+        """Public watchlist view — credential columns are structurally excluded
+        so no caller (GET /api/watchlist included) can ever receive one."""
         with self.engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT * FROM watchlist ORDER BY name ASC")
+                text(
+                    f"SELECT {self._WATCHLIST_PUBLIC_COLS} FROM watchlist ORDER BY name ASC"
+                )
             ).mappings().fetchall()
             return self._rows_to_dicts(rows)
+
+    def get_watchlist_credential(self, name: str) -> dict[str, Any] | None:
+        """INTERNAL reader for the auto-investigation path ONLY.
+
+        Returns {gh_token_enc, gh_owner, gh_repo} (ciphertext!) or None. The
+        caller decrypts in memory, uses, and discards — the plaintext token
+        must never be stored, logged, or returned by any route.
+        """
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT gh_token_enc, gh_owner, gh_repo FROM watchlist WHERE name = :name"
+                ),
+                {"name": name},
+            ).mappings().fetchone()
+            if row is None or not row["gh_token_enc"]:
+                return None
+            return {"gh_token_enc": row["gh_token_enc"], "gh_owner": row["gh_owner"], "gh_repo": row["gh_repo"]}
 
     def update_watchlist_status(
         self, name: str, last_seen_version: str | None = None
