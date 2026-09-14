@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import time
@@ -66,6 +67,14 @@ def create_auth_router(db: Database) -> APIRouter:
             raise HTTPException(status_code=401, detail="not signed in")
         return user
 
+    # Cookie transport defaults fit the same-origin sandbox preview (plain
+    # http). A SPLIT deployment — frontend on Vercel/hosting, backend on a
+    # different site — must set ALFRED_COOKIE_SAMESITE=none and
+    # ALFRED_COOKIE_SECURE=1, or browsers silently drop the session cookie on
+    # every cross-site API response and nobody can stay signed in.
+    cookie_samesite = os.environ.get("ALFRED_COOKIE_SAMESITE", "lax").lower()
+    cookie_secure = os.environ.get("ALFRED_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+
     def _start_session(response: Response, user_id: str) -> None:
         token = secrets.token_urlsafe(32)
         db.create_session(_token_hash(token), user_id, SESSION_TTL_SECONDS)
@@ -74,8 +83,8 @@ def create_auth_router(db: Database) -> APIRouter:
             token,
             max_age=int(SESSION_TTL_SECONDS),
             httponly=True,
-            samesite="lax",
-            secure=False,  # sandbox previews are plain http; flip behind TLS proxy
+            samesite=cookie_samesite,  # type: ignore[arg-type]
+            secure=cookie_secure,
         )
 
     @router.post("/signup")
