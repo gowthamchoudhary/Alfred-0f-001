@@ -70,6 +70,9 @@ app = FastAPI(title="Alfred", version="0.1.0", lifespan=_lifespan)
 # deployed).
 CORS_ALLOWED_ORIGINS = [
     "https://level-pamphlet-outspoken.ngrok-free.dev",
+    # Vercel production aliases for the split frontend deployment
+    "https://alfred-0f-001.vercel.app",
+    "https://alfred-0f-001-jayavarapugowtham-2013s.vercel.app",
 ]
 
 app.add_middleware(
