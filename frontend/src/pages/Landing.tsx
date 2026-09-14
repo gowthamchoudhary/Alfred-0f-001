@@ -12,6 +12,9 @@ function LogoSlot({ slot }: { slot: string }) {
   useEffect(() => {
     // Drop the real asset at frontend/public/logos/<slot>.<ext> and it appears
     // here automatically — no code change needed.
+    // NOTE: both the sandbox SPA fallback and vercel.json's rewrite return a
+    // 200 (serving index.html) for MISSING files — so res.ok alone is a false
+    // positive. Only accept a response whose content-type is really an image.
     let alive = true;
     const exts = ["svg", "png", "webp", "jpg"];
     (async () => {
@@ -19,7 +22,8 @@ function LogoSlot({ slot }: { slot: string }) {
         const url = `/logos/${slot}.${ext}`;
         try {
           const res = await fetch(url, { method: "HEAD" });
-          if (res.ok) {
+          const type = res.headers.get("content-type") ?? "";
+          if (res.ok && type.startsWith("image/")) {
             if (alive) setSrc(url);
             return;
           }
