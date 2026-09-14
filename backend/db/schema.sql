@@ -136,13 +136,15 @@ CREATE TABLE IF NOT EXISTS watchlist (
     -- projects these columns away so responses can never carry them.
     gh_token_enc TEXT,
     gh_owner TEXT,
-    gh_repo TEXT
+    gh_repo TEXT,
+    user_id TEXT                                  -- registering Alfred account, auto investigations inherit it
 );
 
 -- Migration for watchlist tables created before encrypted credentials existed.
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_token_enc TEXT;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_owner TEXT;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS gh_repo TEXT;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- Alfred accounts (email + password; no OAuth providers by design).
 -- password_hash is a salted PBKDF2 hash — never a plaintext password, and
