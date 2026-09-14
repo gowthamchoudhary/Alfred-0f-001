@@ -4,7 +4,7 @@ type AuthMode = "login" | "signup";
 
 /* ------------------------------------------------------------- logo slots */
 
-const LOGO_SLOTS = ["openai", "vercel", "microsoft", "stripe", "docker"] as const;
+const LOGO_SLOTS = ["anakin", "groq", "github", "docker", "supabase"] as const;
 
 function LogoSlot({ slot }: { slot: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -105,7 +105,10 @@ function Navbar({ onAuth }: { onAuth: AuthModeDispatch }) {
   return (
     <header className="flex items-center justify-between px-6 pt-6 sm:px-10">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-[#EAE9E6] px-4 py-1.5 text-xs font-medium text-[#3C3C3B]">Alfred</span>
+        <span className="flex items-center gap-2 rounded-full bg-[#EAE9E6] py-1 pl-1.5 pr-4">
+          <img src="/logos/alfred.png" alt="Alfred logo" className="h-6 w-6 rounded-full object-cover" />
+          <span className="text-xs font-medium text-[#3C3C3B]">Alfred</span>
+        </span>
         <a
           href="#how-it-works"
           className="rounded-full border border-[#E1DFDC] bg-[#F9F9F6] px-4 py-1.5 text-xs text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]"
