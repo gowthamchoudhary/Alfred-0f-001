@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type AuthMode = "login" | "signup";
 
@@ -68,6 +68,37 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* ------------------------------------------------------- scroll-reveal hook */
+
+function useReveal(): (node: HTMLElement | null) => void {
+  const observer = useRef<IntersectionObserver | null>(null);
+
+  useEffect(() => {
+    observer.current = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.current?.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.15 },
+    );
+    // Observe everything currently marked .reveal on the page.
+    document.querySelectorAll<HTMLElement>(".reveal:not(.is-visible)").forEach((el) => {
+      observer.current?.observe(el);
+    });
+    return () => observer.current?.disconnect();
+  }, []);
+
+  return (node) => {
+    if (node && !node.classList.contains("is-visible")) {
+      observer.current?.observe(node);
+    }
+  };
+}
+
 /* ------------------------------------------------------------------ navbar */
 
 function Navbar({ onAuth }: { onAuth: AuthModeDispatch }) {
@@ -75,15 +106,18 @@ function Navbar({ onAuth }: { onAuth: AuthModeDispatch }) {
     <header className="flex items-center justify-between px-6 pt-6 sm:px-10">
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-[#EAE9E6] px-4 py-1.5 text-xs font-medium text-[#3C3C3B]">Alfred</span>
-        {["Product", "Pricing"].map((label) => (
-          <a
-            key={label}
-            href="#"
-            className="rounded-full border border-[#E1DFDC] bg-[#F9F9F6] px-4 py-1.5 text-xs text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]"
-          >
-            {label}
-          </a>
-        ))}
+        <a
+          href="#how-it-works"
+          className="rounded-full border border-[#E1DFDC] bg-[#F9F9F6] px-4 py-1.5 text-xs text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]"
+        >
+          How it works
+        </a>
+        <a
+          href="#how-to-use"
+          className="rounded-full border border-[#E1DFDC] bg-[#F9F9F6] px-4 py-1.5 text-xs text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]"
+        >
+          How to use
+        </a>
       </div>
       <nav className="flex items-center gap-1.5 text-xs text-[#3C3C3B]">
         <a href="#" className="transition-opacity hover:opacity-70">GitHub</a>
@@ -122,26 +156,234 @@ function Hero({ onAuth }: { onAuth: AuthModeDispatch }) {
         Alfred automatically detects updates, tests them on your application, and tells you
         exactly what changes — with real metrics, not guesses.
       </p>
-      <button
-        onClick={() => onAuth("signup")}
-        className="alfred-enter mt-10 rounded-full bg-[#2F2F2E] px-9 py-3.5 text-sm text-[#F9F8F6] transition-all hover:bg-black"
-      >
-        Get started
-      </button>
+      <div className="alfred-enter mt-10 flex flex-wrap items-center justify-center gap-3">
+        <button
+          onClick={() => onAuth("signup")}
+          className="rounded-full bg-[#2F2F2E] px-9 py-3.5 text-sm text-[#F9F8F6] transition-all hover:bg-black"
+        >
+          Get started
+        </button>
+        <a
+          href="#how-to-use"
+          className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-9 py-3.5 text-sm text-[#3C3C3B] transition-colors hover:bg-[#F1F0EC]"
+        >
+          See how it works ↓
+        </a>
+      </div>
     </section>
   );
 }
 
-/* ------------------------------------------------------- product overview */
+/* ------------------------------------------------- how it works (pipeline) */
 
-function ProductOverview() {
+const PIPELINE = [
+  {
+    n: "01",
+    t: "Watch",
+    d: "Alfred's background poller checks every dependency on your watchlist — PyPI feeds and GitHub releases via Anakin — on a fixed schedule.",
+  },
+  {
+    n: "02",
+    t: "Triage",
+    d: "A cheap deterministic filter: major bumps and breaking-change language get accepted, pre-releases and not-actually-newer versions get skipped. Ambiguous cases get one LLM relevance check.",
+  },
+  {
+    n: "03",
+    t: "Prepare",
+    d: "Your repo is cloned twice. Only the candidate copy gets its requirements.txt bumped to the new version — the baseline stays exactly as you run it today.",
+  },
+  {
+    n: "04",
+    t: "Build & run",
+    d: "Both copies are built from their own Dockerfile and run as real containers with resource limits, on separate ports. A build failure is itself a valid, reportable result.",
+  },
+  {
+    n: "05",
+    t: "Test & load",
+    d: "Your own pytest suite runs inside each container. Then a real concurrent HTTP workload — your endpoints, your payloads, your concurrency — fires at both.",
+  },
+  {
+    n: "06",
+    t: "Compare",
+  d: "Pure deterministic math, no AI: pass/fail counts, p50/p95/p99 latency, error rate, throughput → absolute and percentage deltas plus a compatibility score.",
+  },
+  {
+    n: "07",
+    t: "Research",
+    d: "Anakin agentic-search and GitHub release data pull migration guides and breaking-change context for the exact dependency and version pair.",
+  },
+  {
+    n: "08",
+    t: "Reason",
+    d: "One LLM call reads the measured evidence and web research and writes the verdict — SAFE, SAFE_WITH_REVIEW, MODERATE_RISK, or HIGH_RISK — with confidence and reasons.",
+  },
+  {
+    n: "09",
+    t: "Act & verify",
+    d: "The verdict is posted to your repo as a real GitHub issue via the REST API, then fetched back to confirm it exists. The container pair is always cleaned up.",
+  },
+];
+
+function PipelineFlow() {
+  const reveal = useReveal();
   return (
-    <section className="flex flex-col items-center px-6 pb-14 pt-20 text-center sm:pb-16 sm:pt-24">
-      <h2 className="text-3xl font-normal tracking-tight text-[#2F2F2E] sm:text-4xl">From updates to insights.</h2>
-      <p className="mt-4 text-sm text-[#7A7873]">Everything you need to keep your project ahead of change.</p>
+    <div className="relative mx-auto max-w-2xl">
+      {/* vertical connector with a traveling pulse — visual thread through every step */}
+      <div className="flow-line absolute left-[19px] top-3 bottom-3 w-px sm:left-1/2" aria-hidden />
+      <ol className="space-y-10">
+        {PIPELINE.map((step, i) => (
+          <li
+            key={step.n}
+            ref={reveal}
+            className={`relative flex items-start gap-5 ${i % 2 === 1 ? "sm:flex-row-reverse" : ""}`}
+          >
+            <span className="z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#E1DFDC] bg-[#F9F8F6] font-mono text-xs text-[#3C3C3B] shadow-sm">
+              {step.n}
+            </span>
+            <div className="flex-1 rounded-2xl border border-[#EAE9E6] bg-[#F1EFEC]/60 px-5 py-4 text-left">
+              <h4 className="text-sm font-medium text-[#2F2F2E]">{step.t}</h4>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-[#7A7873]">{step.d}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function HowItWorks() {
+  return (
+    <section id="how-it-works" className="px-6 pb-20 pt-20 sm:px-10">
+      <div className="relative border-t border-[#EAE9E6]">
+        <span className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-4 py-1 text-xs text-[#3C3C3B]">
+          The pipeline
+        </span>
+      </div>
+      <h2 className="reveal mt-16 text-center text-3xl font-normal tracking-tight text-[#2F2F2E] sm:text-4xl">
+        What Alfred does the moment a new version drops.
+      </h2>
+      <p className="reveal mx-auto mt-4 max-w-xl text-center text-sm text-[#7A7873]">
+        Nine steps, zero human triggering. Every number comes from a container that actually ran —
+        the AI interprets the evidence, it never invents it.
+      </p>
+      <div className="mt-14">
+        <PipelineFlow />
+      </div>
     </section>
   );
 }
+
+/* ------------------------------------------------- how to use (user guide) */
+
+const GUIDE = [
+  {
+    step: "1",
+    title: "Create your account",
+    body: "Sign up with email and password. That is the only identity Alfred needs — GitHub is an integration, not a login.",
+  },
+  {
+    step: "2",
+    title: "Prepare your repo (the one-time contract)",
+    body: "Alfred runs any repository that follows one minimal convention — nothing is hardcoded to a demo app. Your repo needs four things:",
+    bullets: [
+      "Dockerfile — must expose the app on $PORT",
+      "requirements.txt — pinned versions; this is the file Alfred bumps",
+      "tests/ — a pytest suite that runs inside the container",
+      "alfred.yaml — which dependency to watch, which endpoint to hit, how hard to hit it",
+    ],
+    code: `dependency:
+  name: openai
+  current: "1.99.0"
+workload:
+  endpoint: /chat
+  method: POST
+  concurrency: 20
+  requests: 500
+  payloads:
+    - { "message": "Summarize this refund policy." }`,
+  },
+  {
+    step: "3",
+    title: "Get a GitHub token (2 minutes, once)",
+    body: "The verdict issue must be posted to your repo as you — so Alfred needs a personal access token. Generate a fine-grained token in two clicks:",
+    bullets: [
+      "Open github.com/settings/personal-access-tokens/new",
+      "Repository access: only select the repo that should receive verdict issues",
+      "Permissions: Contents → read-only (that is enough to read releases; the token is used for nothing else)",
+      "Optional metadata: read — leave everything else unchecked",
+      "Copy the github_pat_… value. You will paste it exactly once, below.",
+    ],
+    note: "Security model: the token is stored Fernet-encrypted at rest on your watchlist entry, decrypted in memory only for the duration of one run, never returned by any API endpoint, never logged, and never written to the database in plaintext. Rotate by re-registering; delete the watchlist entry and it is gone.",
+  },
+  {
+    step: "4",
+    title: "Watch a dependency",
+    body: "In the dashboard, open Watchlist → add a dependency (e.g. openai). Paste your token, the issue destination (owner/repo), and you are done. From this moment the loop is fully automatic.",
+  },
+  {
+    step: "5",
+    title: "Let Alfred run — or run it yourself",
+    body: "The background poller checks your watchlist every cycle. When a new release appears, triage decides whether it matters, and accepted changes trigger a full investigation with no human present. You can also trigger one manually: Investigations → point Alfred at any contract-compliant repo path or git URL and a target version.",
+  },
+  {
+    step: "6",
+    title: "Read the verdict",
+    body: "Each investigation shows a live event timeline (every pipeline step, timestamped), real baseline-vs-candidate metrics, the compatibility score, the AI verdict with reasons, and the verified GitHub issue link. Skipped releases are visible too — nothing is hidden.",
+  },
+];
+
+function HowToUse() {
+  const reveal = useReveal();
+  return (
+    <section id="how-to-use" className="px-6 pb-20 pt-4 sm:px-10">
+      <h2 className="reveal text-center text-3xl font-normal tracking-tight text-[#2F2F2E] sm:text-4xl">
+        How to use Alfred — end to end.
+      </h2>
+      <p className="reveal mx-auto mt-4 max-w-xl text-center text-sm text-[#7A7873]">
+        Everything you need: the repo contract, the GitHub token, and the automatic loop.
+      </p>
+      <div className="mx-auto mt-14 max-w-3xl space-y-5">
+        {GUIDE.map((g) => (
+          <div
+            key={g.step}
+            ref={reveal}
+            className="rounded-2xl border border-[#EAE9E6] bg-[#F1EFEC]/60 p-6 sm:p-8"
+          >
+            <div className="flex items-center gap-4">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#2F2F2E] text-sm text-[#F9F8F6]">
+                {g.step}
+              </span>
+              <h3 className="text-base font-medium text-[#2F2F2E]">{g.title}</h3>
+            </div>
+            <p className="mt-4 text-sm leading-relaxed text-[#7A7873]">{g.body}</p>
+            {g.bullets && (
+              <ul className="mt-3 space-y-1.5">
+                {g.bullets.map((b) => (
+                  <li key={b} className="flex gap-2 text-[13px] leading-relaxed text-[#7A7873]">
+                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-[#A6A49E]" />
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {g.code && (
+              <pre className="mt-4 overflow-x-auto rounded-xl border border-[#E1DFDC] bg-[#F9F8F6] p-4 font-mono text-xs leading-relaxed text-[#3C3C3B]">
+                {g.code}
+              </pre>
+            )}
+            {g.note && (
+              <p className="mt-3 rounded-xl border border-[#DFD9BC] bg-[#F4F0E1] px-4 py-3 text-xs leading-relaxed text-[#8A7020]">
+                {g.note}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* --------------------------------------------------------- feature strip */
 
 function FeatureGrid() {
   const features = [
@@ -188,9 +430,12 @@ function FinalCTA({ onAuth }: { onAuth: AuthModeDispatch }) {
           >
             Create account
           </button>
-          <button className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-7 py-3 text-sm text-[#3C3C3B] transition-colors hover:bg-white">
-            Watch demo
-          </button>
+          <a
+            href="#how-to-use"
+            className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-7 py-3 text-sm text-[#3C3C3B] transition-colors hover:bg-white"
+          >
+            Read the guide
+          </a>
         </div>
       </div>
     </section>
@@ -230,7 +475,8 @@ export default function LandingPage({ onAuth }: { onAuth: AuthModeDispatch }) {
       <Navbar onAuth={onAuth} />
       <Hero onAuth={onAuth} />
       <LogoStrip />
-      <ProductOverview />
+      <HowItWorks />
+      <HowToUse />
       <FeatureGrid />
       <FinalCTA onAuth={onAuth} />
       <Footer />
