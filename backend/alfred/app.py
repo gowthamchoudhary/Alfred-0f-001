@@ -300,6 +300,7 @@ def add_watch(req: WatchlistRequest, user: dict[str, Any] = Depends(require_user
         gh_token_enc=gh_token_enc,
         gh_owner=req.github_owner,
         gh_repo=req.github_repo,
+        user_id=user["id"],
     )
     registered = bool(req.github_token)
     return {"ok": True, "name": req.name, "credential_registered": registered}
