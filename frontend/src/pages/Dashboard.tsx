@@ -470,7 +470,26 @@ export default function DashboardPage({
   const [nav, setNav] = useState<NavItem>("Overview");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [gh, setGh] = useState<GhState | null>(null);
+  // The GitHub connection survives page refreshes (sessionStorage, this tab
+  // only) — the token never leaves the browser or reaches the database, but
+  // losing it on a reload silently skipped every ACTION step.
+  const [gh, setGh] = useState<GhState | null>(() => {
+    try {
+      const raw = sessionStorage.getItem("alfred.gh.connection");
+      return raw ? (JSON.parse(raw) as GhState) : null;
+    } catch {
+      return null;
+    }
+  });
+  const connectGh = useCallback((next: GhState | null) => {
+    setGh(next);
+    try {
+      if (next) sessionStorage.setItem("alfred.gh.connection", JSON.stringify(next));
+      else sessionStorage.removeItem("alfred.gh.connection");
+    } catch {
+      // private-mode storage — connection stays in-memory for this mount
+    }
+  }, []);
   const [search, setSearch] = useState("");
 
   // Polling — the dashboard reflects real pipeline state as it progresses.
@@ -601,11 +620,11 @@ export default function DashboardPage({
                         not guesses.
                       </p>
                       <div className="mt-4">
-                        <GithubCardInline gh={gh} onConnect={setGh} onDisconnect={() => setGh(null)} />
+                        <GithubCardInline gh={gh} onConnect={connectGh} onDisconnect={() => connectGh(null)} />
                       </div>
                     </div>
                   ) : (
-                    <GithubCard gh={gh} onConnect={setGh} onDisconnect={() => setGh(null)} />
+                    <GithubCard gh={gh} onConnect={connectGh} onDisconnect={() => connectGh(null)} />
                   )}
 
                   {/* summary cards */}
@@ -785,7 +804,7 @@ export default function DashboardPage({
               {nav === "Settings" && (
                 <div className="space-y-4">
                   <h2 className="text-base font-medium text-[#3C3C3B]">Settings</h2>
-                  <GithubCard gh={gh} onConnect={setGh} onDisconnect={() => setGh(null)} />
+                  <GithubCard gh={gh} onConnect={connectGh} onDisconnect={() => connectGh(null)} />
                   <div className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-5">
                     <p className="text-xs text-[#7A7873]">Account</p>
                     <p className="mt-1 text-sm text-[#3C3C3B]">{user.email}</p>

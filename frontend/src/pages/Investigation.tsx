@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Comparison, type InvestigationDetail } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type InvestigationDetail } from "../api";
 import { StatusBadge, VerdictBadge } from "../components/Badges";
 
 const PIPELINE_STEPS = [
@@ -15,13 +15,15 @@ const PIPELINE_STEPS = [
   "CLEANUP",
 ];
 
+/* ------------------------------------------------------------ step timeline */
+
 function StepTimeline({ detail, tick }: { detail: InvestigationDetail | null; tick: number }) {
   const events = detail?.events ?? [];
   const seenSteps = new Set(events.map((e) => e.step));
   const currentStep = detail?.investigation.current_step;
   const status = detail?.investigation.status;
 
-  const stepState = (step: string): "done" | "active" | "pending" | "skipped" => {
+  const stepState = (step: string): "done" | "active" | "pending" => {
     const idx = PIPELINE_STEPS.indexOf(step);
     const currentIdx = currentStep ? PIPELINE_STEPS.indexOf(currentStep) : -1;
     if (status === "complete" || seenSteps.has(step)) return "done";
@@ -33,23 +35,26 @@ function StepTimeline({ detail, tick }: { detail: InvestigationDetail | null; ti
 
   const dot = (state: string) =>
     state === "done"
-      ? "bg-signal-green border-signal-green text-ink-950"
+      ? "border-[#9DB894] bg-[#DDE7D7] text-[#4A6B45]"
       : state === "active"
-        ? "bg-signal-blue border-signal-blue text-ink-950 animate-pulse"
-        : "border-ink-700 bg-ink-800 text-slate-600";
+        ? "border-[#2F2F2E] bg-[#2F2F2E] text-white animate-pulse"
+        : "border-[#E1DFDC] bg-[#F9F8F6] text-[#A6A49E]";
+
+  const label = (state: string) =>
+    state === "pending" ? "text-[#A6A49E]" : "text-[#3C3C3B]";
 
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5" data-tick={tick}>
+    <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-5" data-tick={tick}>
       {PIPELINE_STEPS.map((step) => {
         const state = stepState(step);
         return (
           <div key={step} className="flex items-center gap-2">
-            <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${dot(state)}`}>
+            <span
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${dot(state)}`}
+            >
               {state === "done" ? "✓" : state === "active" ? "•" : ""}
             </span>
-            <span className={`font-mono text-xs ${state === "pending" ? "text-slate-500" : "text-slate-200"}`}>
-              {step}
-            </span>
+            <span className={`font-mono text-[11px] tracking-tight ${label(state)}`}>{step}</span>
           </div>
         );
       })}
@@ -57,24 +62,25 @@ function StepTimeline({ detail, tick }: { detail: InvestigationDetail | null; ti
   );
 }
 
+/* ---------------------------------------------------------------- event log */
+
 function EventLog({ detail }: { detail: InvestigationDetail | null }) {
   const events = detail?.events ?? [];
-  const fmt = (t: number) =>
-    new Date(t * 1000).toLocaleTimeString("en-GB", { hour12: false });
+  const fmt = (t: number) => new Date(t * 1000).toLocaleTimeString("en-GB", { hour12: false });
   const levelColor = (level: string) =>
-    level === "error" ? "text-signal-red" : level === "warn" ? "text-signal-amber" : "text-slate-400";
+    level === "error" ? "text-[#A94B43]" : level === "warn" ? "text-[#8A7020]" : "text-[#7A7873]";
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [events.length]);
 
   return (
-    <div className="max-h-72 overflow-y-auto rounded-lg border border-ink-700/60 bg-black/40 p-3 font-mono text-xs">
-      {events.length === 0 && <p className="text-slate-600">waiting for events…</p>}
+    <div className="max-h-72 overflow-y-auto rounded-2xl border border-[#EAE9E6] bg-[#F1EFEC]/60 p-3 font-mono text-xs">
+      {events.length === 0 && <p className="text-[#A6A49E]">waiting for events…</p>}
       {events.map((e) => (
         <div key={e.id} className="flex gap-2 py-0.5">
-          <span className="shrink-0 text-slate-600">{fmt(e.created_at)}</span>
-          <span className="shrink-0 font-semibold text-signal-blue">{e.step}</span>
+          <span className="shrink-0 text-[#A6A49E]">{fmt(e.created_at)}</span>
+          <span className="shrink-0 font-semibold text-[#2F2F2E]">{e.step}</span>
           <span className={levelColor(e.level)}>{e.message}</span>
         </div>
       ))}
@@ -88,8 +94,11 @@ function fmtNum(v: number | null | undefined, digits = 2): string {
   return Number(v).toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
-function ComparisonTable({ comparison }: { comparison: Comparison | null }) {
-  if (!comparison) return <p className="text-sm text-slate-500">comparison not available yet</p>;
+/* -------------------------------------------------------- comparison table */
+
+function ComparisonTable({ comparison }: { comparison: InvestigationDetail["comparison"] }) {
+  if (!comparison)
+    return <p className="text-sm text-[#7A7873]">comparison not available yet</p>;
   const label: Record<string, string> = {
     tests_passed: "Tests passed",
     tests_failed: "Tests failed",
@@ -102,49 +111,64 @@ function ComparisonTable({ comparison }: { comparison: Comparison | null }) {
   };
   return (
     <div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-ink-700 text-left text-xs uppercase tracking-wider text-slate-500">
-            <th className="py-2 pr-4">Metric</th>
-            <th className="py-2 pr-4 text-right">Baseline</th>
-            <th className="py-2 pr-4 text-right">Candidate</th>
-            <th className="py-2 pr-4 text-right">Δ abs</th>
-            <th className="py-2 text-right">Δ %</th>
-          </tr>
-        </thead>
-        <tbody className="font-mono">
-          {Object.entries(comparison.metrics).map(([key, m]) => {
-            const worse =
-              (key.includes("latency") || key === "error_rate" || key.includes("failed") || key.includes("errors"))
-                ? m.absolute_delta > 0
-                : m.absolute_delta < 0;
-            const deltaColor = m.absolute_delta === 0 ? "text-slate-400" : worse ? "text-signal-red" : "text-signal-green";
-            return (
-              <tr key={key} className="border-b border-ink-800/60">
-                <td className="py-2 pr-4 font-sans text-slate-300">{label[key] ?? key}</td>
-                <td className="py-2 pr-4 text-right text-slate-400">{fmtNum(m.baseline, 4)}</td>
-                <td className="py-2 pr-4 text-right text-slate-100">{fmtNum(m.candidate, 4)}</td>
-                <td className={`py-2 pr-4 text-right ${deltaColor}`}>
-                  {m.absolute_delta > 0 ? "+" : ""}{fmtNum(m.absolute_delta, 4)}
-                </td>
-                <td className={`py-2 text-right ${deltaColor}`}>
-                  {m.percentage_delta === null ? "—" : `${m.percentage_delta > 0 ? "+" : ""}${m.percentage_delta}%`}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-[#E1DFDC] text-left text-[11px] uppercase tracking-wider text-[#7A7873]">
+              <th className="py-2 pr-4 font-medium">Metric</th>
+              <th className="py-2 pr-4 text-right font-medium">Baseline</th>
+              <th className="py-2 pr-4 text-right font-medium">Candidate</th>
+              <th className="py-2 pr-4 text-right font-medium">Δ abs</th>
+              <th className="py-2 text-right font-medium">Δ %</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono">
+            {Object.entries(comparison.metrics).map(([key, m]) => {
+              const worse =
+                key.includes("latency") || key === "error_rate" || key.includes("failed") || key.includes("errors")
+                  ? m.absolute_delta > 0
+                  : m.absolute_delta < 0;
+              const deltaColor =
+                m.absolute_delta === 0
+                  ? "text-[#A6A49E]"
+                  : worse
+                    ? "text-[#A94B43]"
+                    : "text-[#4A6B45]";
+              return (
+                <tr key={key} className="border-b border-[#EAE9E6]">
+                  <td className="py-2 pr-4 font-sans text-[#3C3C3B]">{label[key] ?? key}</td>
+                  <td className="py-2 pr-4 text-right text-[#7A7873]">{fmtNum(m.baseline, 4)}</td>
+                  <td className="py-2 pr-4 text-right text-[#3C3C3B]">{fmtNum(m.candidate, 4)}</td>
+                  <td className={`py-2 pr-4 text-right ${deltaColor}`}>
+                    {m.absolute_delta > 0 ? "+" : ""}
+                    {fmtNum(m.absolute_delta, 4)}
+                  </td>
+                  <td className={`py-2 text-right ${deltaColor}`}>
+                    {m.percentage_delta === null
+                      ? "—"
+                      : `${m.percentage_delta > 0 ? "+" : ""}${m.percentage_delta}%`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       <div className="mt-4 grid grid-cols-3 gap-3">
-        {[
-          ["Functional", comparison.scores.functional_score],
-          ["Performance", comparison.scores.performance_score],
-          ["Overall", comparison.scores.overall_score],
-        ].map(([label, score]) => (
-          <div key={label as string} className="rounded-lg border border-ink-700/60 bg-ink-800/50 p-3 text-center">
-            <p className="text-xs uppercase tracking-wider text-slate-500">{label as string}</p>
-            <p className="mt-1 font-mono text-xl font-semibold text-slate-100">
-              {((score as number) * 100).toFixed(1)}
+        {(
+          [
+            ["Functional", comparison.scores.functional_score],
+            ["Performance", comparison.scores.performance_score],
+            ["Overall", comparison.scores.overall_score],
+          ] as const
+        ).map(([lbl, score]) => (
+          <div
+            key={lbl}
+            className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-3 text-center"
+          >
+            <p className="text-[11px] uppercase tracking-wider text-[#7A7873]">{lbl}</p>
+            <p className="mt-1 font-mono text-xl font-semibold text-[#3C3C3B]">
+              {(score * 100).toFixed(1)}
             </p>
           </div>
         ))}
@@ -153,18 +177,20 @@ function ComparisonTable({ comparison }: { comparison: Comparison | null }) {
   );
 }
 
+/* ------------------------------------------------------------- env health */
+
 function EnvHealth({ detail }: { detail: InvestigationDetail | null }) {
   const health = detail?.comparison?.environment_health;
   if (!health) return null;
   return (
     <div className="grid grid-cols-2 gap-3">
-      {["baseline", "candidate"].map((env) => {
+      {(["baseline", "candidate"] as const).map((env) => {
         const h = health[env];
         if (!h) return null;
         return (
-          <div key={env} className="rounded-lg border border-ink-700/60 bg-ink-800/50 p-3">
-            <p className="font-mono text-xs uppercase tracking-wider text-slate-500">{env}</p>
-            <p className="mt-1 text-sm">
+          <div key={env} className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-3">
+            <p className="font-mono text-[11px] uppercase tracking-wider text-[#7A7873]">{env}</p>
+            <p className="mt-1 text-sm text-[#3C3C3B]">
               build {h.build_success ? "✅" : "❌"} · startup {h.startup_success ? "✅" : "❌"}
             </p>
           </div>
@@ -174,34 +200,38 @@ function EnvHealth({ detail }: { detail: InvestigationDetail | null }) {
   );
 }
 
+/* ------------------------------------------------------------ verdict card */
+
 function VerdictCard({ detail }: { detail: InvestigationDetail | null }) {
   const decision = detail?.decision;
   const inv = detail?.investigation;
   if (!inv) return null;
   if (!decision && inv.status === "running") {
     return (
-      <div className="card flex items-center justify-center">
-        <p className="animate-pulse font-mono text-sm text-slate-500">reasoning over measured evidence…</p>
+      <div className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-6">
+        <p className="animate-pulse font-mono text-sm text-[#7A7873]">
+          reasoning over measured evidence…
+        </p>
       </div>
     );
   }
   if (!decision) return null;
   return (
-    <div className="card">
+    <div className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-wider text-slate-500">Verdict</p>
+          <p className="text-[11px] uppercase tracking-wider text-[#7A7873]">Verdict</p>
           <div className="mt-1 flex items-center gap-3">
             <VerdictBadge verdict={decision.verdict} />
-            <span className="font-mono text-xs text-slate-500">
+            <span className="font-mono text-xs text-[#7A7873]">
               confidence {(decision.confidence * 100).toFixed(0)}% · {decision.decided_by}
             </span>
           </div>
         </div>
         {inv.compatibility_score !== null && (
           <div className="text-right">
-            <p className="text-xs uppercase tracking-wider text-slate-500">Score</p>
-            <p className="font-mono text-2xl font-bold text-slate-100">
+            <p className="text-[11px] uppercase tracking-wider text-[#7A7873]">Score</p>
+            <p className="font-mono text-2xl font-bold text-[#3C3C3B]">
               {(inv.compatibility_score * 100).toFixed(1)}
             </p>
           </div>
@@ -209,13 +239,13 @@ function VerdictCard({ detail }: { detail: InvestigationDetail | null }) {
       </div>
       <ul className="mt-4 space-y-1.5">
         {decision.reasons.map((r, i) => (
-          <li key={i} className="flex gap-2 text-sm text-slate-300">
-            <span className="text-signal-blue">›</span> {r}
+          <li key={i} className="flex gap-2 text-sm text-[#3C3C3B]">
+            <span className="text-[#2F2F2E]">›</span> {r}
           </li>
         ))}
       </ul>
-      <p className="mt-4 rounded-lg border border-ink-700/60 bg-ink-800/50 p-3 text-sm text-slate-300">
-        <span className="font-semibold text-slate-200">Recommendation: </span>
+      <p className="mt-4 rounded-2xl border border-[#EAE9E6] bg-[#F1EFEC]/60 p-3 text-sm text-[#3C3C3B]">
+        <span className="font-semibold">Recommendation: </span>
         {decision.recommendation}
       </p>
       {detail?.action && (
@@ -225,23 +255,23 @@ function VerdictCard({ detail }: { detail: InvestigationDetail | null }) {
               href={detail.action.issue_url}
               target="_blank"
               rel="noreferrer"
-              className="text-signal-blue underline decoration-dotted hover:text-white"
+              className="font-medium text-[#2F2F2E] underline underline-offset-4 hover:opacity-70"
             >
               GitHub issue #{detail.action.issue_number}
               {detail.action.verified ? " ✓ verified" : " (unverified)"}
             </a>
           ) : detail.action.skipped ? (
-            <p className="text-slate-500">
-              GitHub action skipped — {detail.action.skip_reason}
-            </p>
+            <p className="text-[#7A7873]">GitHub action skipped — {detail.action.skip_reason}</p>
           ) : (
-            <p className="text-signal-red">GitHub action failed — {detail.action.error}</p>
+            <p className="text-[#A94B43]">GitHub action failed — {detail.action.error}</p>
           )}
         </div>
       )}
     </div>
   );
 }
+
+/* -------------------------------------------------------------- page shell */
 
 export default function InvestigationPage({
   id,
@@ -254,84 +284,113 @@ export default function InvestigationPage({
   const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      try {
-        const d = await api.investigationDetail(id);
-        if (!alive) return;
-        setDetail(d);
-        setTick((t) => t + 1);
-        setError(null);
-      } catch (e) {
-        if (alive) setError(String(e));
+  const poll = useCallback(async () => {
+    try {
+      const d = await api.investigationDetail(id);
+      setDetail(d);
+      setTick((t) => t + 1);
+      setError(null);
+    } catch (e) {
+      // 404 = wrong id or another account's run — stop hammering, show a calm message.
+      setError(String(e instanceof Error ? e.message : e));
+      if (String(e).includes("404")) {
+        setDetail(null);
       }
-    };
-    poll();
-    const timer = setInterval(poll, 1500);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
+    }
   }, [id]);
 
+  useEffect(() => {
+    poll();
+    const timer = setInterval(poll, 1500);
+    return () => clearInterval(timer);
+  }, [poll]);
+
   const inv = detail?.investigation;
+  const notFound = error !== null && error.includes("404");
 
   return (
-    <div className="space-y-5">
-      <button onClick={onBack} className="btn-ghost">
-        ← All investigations
-      </button>
+    <div className="alfred-shell min-h-screen">
+      <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8">
+        <button
+          onClick={onBack}
+          className="rounded-full border border-[#E1DFDC] bg-[#F9F8F6] px-4 py-1.5 text-xs text-[#7A7873] transition-colors hover:bg-[#F1EFEC] hover:text-[#3C3C3B]"
+        >
+          ← All investigations
+        </button>
 
-      {error && <div className="card border-signal-red/40 text-sm text-signal-red">failed to load: {error}</div>}
-
-      {inv && (
-        <div className="card">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="font-mono text-xl font-bold text-white">
-                {inv.dependency_name}{" "}
-                <span className="text-slate-500">{inv.baseline_version} →</span>{" "}
-                <span className="text-signal-blue">{inv.candidate_version}</span>
-              </h1>
-              <p className="mt-1 truncate text-xs text-slate-500" title={inv.repo_source}>
-                {inv.repo_source} · triggered by {inv.trigger}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <StatusBadge status={inv.status} />
-              <VerdictBadge verdict={inv.verdict} />
-            </div>
-          </div>
-          {inv.error && (
-            <p className="mt-3 rounded-lg border border-signal-red/30 bg-signal-red/5 p-2 font-mono text-xs text-signal-red">
-              {inv.error}
+        {notFound && (
+          <div className="mt-6 rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-8 text-center">
+            <p className="text-sm font-medium text-[#3C3C3B]">
+              This investigation isn't available.
             </p>
-          )}
-          <div className="mt-4 border-t border-ink-800 pt-4">
-            <StepTimeline detail={detail} tick={tick} />
+            <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-[#7A7873]">
+              It may belong to a different account, or the run died before it was created. Head
+              back to the dashboard and start a fresh run — every real run gets its own page like
+              this one.
+            </p>
+            <button
+              onClick={onBack}
+              className="mt-4 rounded-full bg-[#2F2F2E] px-5 py-2 text-sm text-[#F9F8F6] transition-all hover:bg-black"
+            >
+              Back to dashboard
+            </button>
+          </div>
+        )}
+
+        {!notFound && error && (
+          <div className="mt-6 rounded-2xl border border-[#E5C4C0] bg-[#F7E9E7] p-4 text-sm text-[#A94B43]">
+            failed to load: {error}
+          </div>
+        )}
+
+        {inv && (
+          <div className="mt-6 rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="truncate font-mono text-xl font-bold text-[#3C3C3B]">
+                  {inv.dependency_name}{" "}
+                  <span className="text-[#7A7873]">{inv.baseline_version} →</span>{" "}
+                  <span className="text-[#2E5AAC]">{inv.candidate_version}</span>
+                </h1>
+                <p className="mt-1 truncate text-xs text-[#7A7873]" title={inv.repo_source}>
+                  {inv.repo_source} · triggered by {inv.trigger}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <StatusBadge status={inv.status} />
+                <VerdictBadge verdict={inv.verdict} />
+              </div>
+            </div>
+            {inv.error && (
+              <p className="mt-3 rounded-2xl border border-[#E5C4C0] bg-[#F7E9E7] p-3 font-mono text-xs text-[#A94B43]">
+                {inv.error}
+              </p>
+            )}
+            <div className="mt-4 border-t border-[#EAE9E6] pt-4">
+              <StepTimeline detail={detail} tick={tick} />
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-6">
+            <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#7A7873]">
+              Live pipeline log
+            </h2>
+            <EventLog detail={detail} />
+          </div>
+          <div className="space-y-6">
+            <VerdictCard detail={detail} />
+            <EnvHealth detail={detail} />
           </div>
         </div>
-      )}
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="card">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
-            Live pipeline log
+        <div className="mt-6 rounded-2xl border border-[#EAE9E6] bg-[#F9F8F6] p-6">
+          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#7A7873]">
+            Baseline vs candidate — measured
           </h2>
-          <EventLog detail={detail} />
+          <ComparisonTable comparison={detail?.comparison ?? null} />
         </div>
-        <div className="space-y-5">
-          <VerdictCard detail={detail} />
-          <EnvHealth detail={detail} />
-        </div>
-      </div>
-
-      <div className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Baseline vs candidate — measured
-        </h2>
-        <ComparisonTable comparison={detail?.comparison ?? null} />
       </div>
     </div>
   );
